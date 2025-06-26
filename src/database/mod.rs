@@ -199,6 +199,55 @@ impl CharacterDatabase {
                         }
                         character.insert("torch_lit".to_string(), serde_json::json!(false));
                     }
+                    
+                    // Add combat skills field if missing
+                    if !character.contains_key("combat_skills") {
+                        if !needs_migration {
+                            println!("⚔️ Adding combat skills system to character: {}", name);
+                        }
+                        needs_migration = true;
+                        character.insert("combat_skills".to_string(), serde_json::json!({}));
+                    }
+                    
+                    // Add equipment field if missing
+                    if !character.contains_key("equipment") {
+                        if !needs_migration {
+                            println!("🎒 Adding equipment system to character: {}", name);
+                        }
+                        needs_migration = true;
+                        character.insert("equipment".to_string(), serde_json::json!({
+                            "weapon": null,
+                            "armor": null,
+                            "shield": null,
+                            "accessory1": null,
+                            "accessory2": null
+                        }));
+                    }
+                    
+                    // Migrate old inventory format to new inventory system
+                    if let Some(inventory) = character.get("inventory") {
+                        if inventory.is_array() {
+                            if !needs_migration {
+                                println!("📦 Migrating inventory system for character: {}", name);
+                            }
+                            needs_migration = true;
+                            
+                            // Get character strength for weight calculation
+                            let strength = character.get("characteristics")
+                                .and_then(|c| c.get("strength"))
+                                .and_then(|s| s.as_f64())
+                                .unwrap_or(10.0) as f32;
+                            
+                            // Create new inventory structure
+                            let new_inventory = serde_json::json!({
+                                "items": [],
+                                "max_weight": strength * 10.0,
+                                "weight_penalty": 0.0
+                            });
+                            
+                            character.insert("inventory".to_string(), new_inventory);
+                        }
+                    }
                 }
             }
         }

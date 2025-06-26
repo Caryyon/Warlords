@@ -147,6 +147,90 @@ impl Weapon {
             range: None,
         }
     }
+    
+    pub fn iron_sword() -> Self {
+        Weapon {
+            name: "Iron Sword".to_string(),
+            weapon_type: WeaponType::Sword,
+            damage_dice: "1d8".to_string(),
+            damage_type: DamageType::Slashing,
+            damage_bonus: 1,
+            attack_bonus: 1,
+            two_handed: false,
+            ranged: false,
+            range: None,
+        }
+    }
+    
+    pub fn steel_sword() -> Self {
+        Weapon {
+            name: "Steel Sword".to_string(),
+            weapon_type: WeaponType::Sword,
+            damage_dice: "1d8".to_string(),
+            damage_type: DamageType::Slashing,
+            damage_bonus: 2,
+            attack_bonus: 2,
+            two_handed: false,
+            ranged: false,
+            range: None,
+        }
+    }
+    
+    pub fn war_axe() -> Self {
+        Weapon {
+            name: "War Axe".to_string(),
+            weapon_type: WeaponType::Axe,
+            damage_dice: "1d10".to_string(),
+            damage_type: DamageType::Slashing,
+            damage_bonus: 0,
+            attack_bonus: 0,
+            two_handed: true,
+            ranged: false,
+            range: None,
+        }
+    }
+    
+    pub fn iron_mace() -> Self {
+        Weapon {
+            name: "Iron Mace".to_string(),
+            weapon_type: WeaponType::Mace,
+            damage_dice: "1d6".to_string(),
+            damage_type: DamageType::Bludgeoning,
+            damage_bonus: 1,
+            attack_bonus: 0,
+            two_handed: false,
+            ranged: false,
+            range: None,
+        }
+    }
+    
+    pub fn dagger() -> Self {
+        Weapon {
+            name: "Dagger".to_string(),
+            weapon_type: WeaponType::Dagger,
+            damage_dice: "1d4".to_string(),
+            damage_type: DamageType::Piercing,
+            damage_bonus: 0,
+            attack_bonus: 2,
+            two_handed: false,
+            ranged: false,
+            range: None,
+        }
+    }
+    
+    pub fn short_bow() -> Self {
+        Weapon {
+            name: "Short Bow".to_string(),
+            weapon_type: WeaponType::Bow,
+            damage_dice: "1d6".to_string(),
+            damage_type: DamageType::Piercing,
+            damage_bonus: 0,
+            attack_bonus: 1,
+            two_handed: true,
+            ranged: true,
+            range: Some(150),
+        }
+    }
 
     pub fn roll_damage(&self) -> (u32, u32) {
         let mut rng = rand::thread_rng();
@@ -176,12 +260,15 @@ impl Weapon {
 
 impl CombatParticipant {
     pub fn from_character(character: &ForgeCharacter, weapon: Option<Weapon>) -> Self {
+        // Use equipped items from character, with optional weapon override
+        let equipped_weapon = weapon.or_else(|| character.equipment.weapon.clone());
+        
         CombatParticipant {
             name: character.name.clone(),
             combat_stats: character.combat_stats.clone(),
-            weapon,
-            armor: None,
-            shield: None,
+            weapon: equipped_weapon,
+            armor: character.equipment.armor.clone(),
+            shield: character.equipment.shield.clone(),
             initiative: 0,
             is_player: true,
         }

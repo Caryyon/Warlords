@@ -30,6 +30,8 @@ pub enum UIState {
     CharacterList(Vec<(String, chrono::DateTime<chrono::Utc>)>, Option<usize>), // characters, selected_index
     Playing,
     CharacterMenu,
+    InventoryManagement(InventoryState),
+    EquipmentManagement(EquipmentState),
     WorldExploration(WorldExplorationState),
     DungeonExploration(DungeonExplorationState),
     Combat(CombatState),
@@ -95,6 +97,65 @@ pub struct CharacterCreationState {
 }
 
 #[derive(Debug, Clone)]
+pub struct InventoryState {
+    pub selected_index: usize,
+    pub scroll_offset: usize,
+    pub view_mode: InventoryViewMode,
+    pub sort_mode: InventorySortMode,
+    pub filter_type: Option<crate::forge::ItemType>,
+    pub showing_details: bool,
+    pub selected_item_details: Option<InventoryItemDetails>,
+    pub sorted_indices: Vec<usize>, // Maps display index -> original index
+}
+
+#[derive(Debug, Clone)]
+pub enum InventoryViewMode {
+    List,           // Simple list view
+    Grid,           // Grid view with icons
+    Details,        // Detailed view with stats
+}
+
+#[derive(Debug, Clone)]
+pub enum InventorySortMode {
+    Name,
+    Type,
+    Weight,
+    Value,
+    Quantity,
+}
+
+#[derive(Debug, Clone)]
+pub struct InventoryItemDetails {
+    pub item: crate::forge::InventoryItem,
+    pub can_equip: bool,
+    pub stat_comparison: Option<StatComparison>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StatComparison {
+    pub current_stats: String,
+    pub new_stats: String,
+    pub improvement: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct EquipmentState {
+    pub selected_slot: EquipmentSlot,
+    pub showing_details: bool,
+    pub available_items: Vec<crate::forge::InventoryItem>,
+    pub selected_item_index: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum EquipmentSlot {
+    Weapon,
+    Armor,
+    Shield,
+    Accessory1,
+    Accessory2,
+}
+
+#[derive(Debug, Clone)]
 pub enum CreationStep {
     Rolling,
     RaceSelection,
@@ -103,6 +164,75 @@ pub enum CreationStep {
     SpellSelection,
     GearSelection,
     Confirmation,
+}
+
+impl InventoryState {
+    // Helper function to compute sorted indices based on current sort mode
+    pub fn compute_sorted_indices(&self, items: &[crate::forge::InventoryItem]) -> Vec<usize> {
+        let mut sorted_items: Vec<(usize, &crate::forge::InventoryItem)> = items
+            .iter()
+            .enumerate()
+            .collect();
+        
+        // Sort based on current sort mode
+        match self.sort_mode {
+            InventorySortMode::Name => {
+                sorted_items.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
+            }
+            InventorySortMode::Type => {
+                sorted_items.sort_by(|(_, a), (_, b)| {
+                    let a_type = match &a.item_type {
+                        crate::forge::ItemType::Weapon(_) => "Weapon",
+                        crate::forge::ItemType::Armor(_) => "Armor", 
+                        crate::forge::ItemType::Accessory(_) => "Accessory",
+                        crate::forge::ItemType::Consumable(_) => "Consumable",
+                        crate::forge::ItemType::Material(_) => "Material",
+                        crate::forge::ItemType::Misc(_) => "Misc",
+                    };
+                    let b_type = match &b.item_type {
+                        crate::forge::ItemType::Weapon(_) => "Weapon",
+                        crate::forge::ItemType::Armor(_) => "Armor",
+                        crate::forge::ItemType::Accessory(_) => "Accessory", 
+                        crate::forge::ItemType::Consumable(_) => "Consumable",
+                        crate::forge::ItemType::Material(_) => "Material",
+                        crate::forge::ItemType::Misc(_) => "Misc",
+                    };
+                    a_type.cmp(b_type).then(a.name.cmp(&b.name))
+                });
+            }
+            InventorySortMode::Weight => {
+                sorted_items.sort_by(|(_, a), (_, b)| {
+                    let a_weight = a.weight * a.quantity as f32;
+                    let b_weight = b.weight * b.quantity as f32;
+                    b_weight.partial_cmp(&a_weight).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            InventorySortMode::Value => {
+                sorted_items.sort_by(|(_, a), (_, b)| {
+                    let a_value = a.value * a.quantity;
+                    let b_value = b.value * b.quantity;
+                    b_value.cmp(&a_value)
+                });
+            }
+            InventorySortMode::Quantity => {
+                sorted_items.sort_by(|(_, a), (_, b)| b.quantity.cmp(&a.quantity));
+            }
+        }
+        
+        // Return the mapping from display index to original index
+        sorted_items.iter().map(|(original_index, _)| *original_index).collect()
+    }
+    
+    // Helper to get original index from display index
+    pub fn get_original_index(&self, display_index: usize, items: &[crate::forge::InventoryItem]) -> Option<usize> {
+        if self.sorted_indices.is_empty() {
+            // If no cached sorted indices, compute them
+            let sorted_indices = self.compute_sorted_indices(items);
+            sorted_indices.get(display_index).copied()
+        } else {
+            self.sorted_indices.get(display_index).copied()
+        }
+    }
 }
 
 impl GameUI {
@@ -155,6 +285,8 @@ impl GameUI {
                 UIState::CharacterList(character_list, selected_index) => Self::draw_character_list_static(f, Some(character_list), *selected_index),
                 UIState::Playing => Self::draw_game_static(f, character_clone.as_ref()),
                 UIState::CharacterMenu => Self::draw_character_menu_static(f, character_clone.as_ref()),
+                UIState::InventoryManagement(inventory_state) => Self::draw_inventory_static(f, inventory_state, character_clone.as_ref()),
+                UIState::EquipmentManagement(equipment_state) => Self::draw_equipment_static(f, equipment_state, character_clone.as_ref()),
                 UIState::WorldExploration(world_state) => Self::draw_world_exploration_static(f, world_state, character_clone.as_ref()),
                 UIState::DungeonExploration(dungeon_state) => Self::draw_dungeon_exploration_static(f, dungeon_state, character_clone.as_ref()),
                 UIState::Combat(combat_state) => Self::draw_combat_static(f, combat_state),
@@ -1141,8 +1273,13 @@ impl GameUI {
                 Line::from(Span::styled("Inventory:", Style::default().fg(Color::Magenta))),
             ]);
 
-            for item in &character.inventory {
-                details.push(Line::from(format!("• {}", item)));
+            for item in &character.inventory.items {
+                let quantity_text = if item.quantity > 1 {
+                    format!(" ({})", item.quantity)
+                } else {
+                    String::new()
+                };
+                details.push(Line::from(format!("• {}{}", item.name, quantity_text)));
             }
 
             details.extend(vec![
@@ -1199,7 +1336,7 @@ impl GameUI {
             f.render_widget(combat_panel, right_chunks[1]);
 
             // Controls
-            let controls = Paragraph::new("ESC/M: Return to Game | Q/Ctrl+C: Quit")
+            let controls = Paragraph::new("I: Inventory | E: Equipment | ESC/M: Return to Game | Q/Ctrl+C: Quit")
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL).title("Controls").border_style(Style::default().fg(Color::DarkGray)));
@@ -2225,5 +2362,362 @@ impl GameUI {
             }
         }
         Ok(None)
+    }
+
+    fn draw_inventory_static(f: &mut Frame, inventory_state: &InventoryState, current_character: Option<&crate::forge::ForgeCharacter>) {
+        let area = f.size();
+        
+        if let Some(character) = current_character {
+            // Main layout: inventory list, details panel, controls
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(60), // Item list
+                    Constraint::Percentage(40), // Details/stats
+                ])
+                .split(area);
+                
+            let left_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3), // Title
+                    Constraint::Min(0),    // Item list
+                    Constraint::Length(5), // Weight/capacity info
+                    Constraint::Length(3), // Controls
+                ])
+                .split(main_chunks[0]);
+                
+            let right_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),  // Equipment status
+                    Constraint::Min(0),     // Item details
+                ])
+                .split(main_chunks[1]);
+
+            // Title with sort/filter info
+            let sort_text = match inventory_state.sort_mode {
+                InventorySortMode::Name => "Name",
+                InventorySortMode::Type => "Type", 
+                InventorySortMode::Weight => "Weight",
+                InventorySortMode::Value => "Value",
+                InventorySortMode::Quantity => "Quantity",
+            };
+            
+            let filter_text = match &inventory_state.filter_type {
+                Some(_) => " (Filtered)",
+                None => "",
+            };
+            
+            let title = Paragraph::new(format!("Inventory - Sort: {}{}", sort_text, filter_text))
+                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)));
+            f.render_widget(title, left_chunks[0]);
+
+            // Item list - create sorted version based on current sort mode
+            let mut sorted_items: Vec<(usize, &crate::forge::InventoryItem)> = character.inventory.items
+                .iter()
+                .enumerate()
+                .collect();
+            
+            // Sort based on current sort mode
+            match inventory_state.sort_mode {
+                InventorySortMode::Name => {
+                    sorted_items.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
+                }
+                InventorySortMode::Type => {
+                    sorted_items.sort_by(|(_, a), (_, b)| {
+                        let a_type = match &a.item_type {
+                            crate::forge::ItemType::Weapon(_) => "Weapon",
+                            crate::forge::ItemType::Armor(_) => "Armor", 
+                            crate::forge::ItemType::Accessory(_) => "Accessory",
+                            crate::forge::ItemType::Consumable(_) => "Consumable",
+                            crate::forge::ItemType::Material(_) => "Material",
+                            crate::forge::ItemType::Misc(_) => "Misc",
+                        };
+                        let b_type = match &b.item_type {
+                            crate::forge::ItemType::Weapon(_) => "Weapon",
+                            crate::forge::ItemType::Armor(_) => "Armor",
+                            crate::forge::ItemType::Accessory(_) => "Accessory", 
+                            crate::forge::ItemType::Consumable(_) => "Consumable",
+                            crate::forge::ItemType::Material(_) => "Material",
+                            crate::forge::ItemType::Misc(_) => "Misc",
+                        };
+                        a_type.cmp(b_type).then(a.name.cmp(&b.name))
+                    });
+                }
+                InventorySortMode::Weight => {
+                    sorted_items.sort_by(|(_, a), (_, b)| {
+                        let a_weight = a.weight * a.quantity as f32;
+                        let b_weight = b.weight * b.quantity as f32;
+                        b_weight.partial_cmp(&a_weight).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+                InventorySortMode::Value => {
+                    sorted_items.sort_by(|(_, a), (_, b)| {
+                        let a_value = a.value * a.quantity;
+                        let b_value = b.value * b.quantity;
+                        b_value.cmp(&a_value)
+                    });
+                }
+                InventorySortMode::Quantity => {
+                    sorted_items.sort_by(|(_, a), (_, b)| b.quantity.cmp(&a.quantity));
+                }
+            }
+            
+            let mut item_lines = Vec::new();
+            
+            for (display_index, (original_index, item)) in sorted_items.iter().enumerate() {
+                let selected = display_index == inventory_state.selected_index;
+                let style = if selected {
+                    Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                
+                let quantity_text = if item.quantity > 1 {
+                    format!(" ({})", item.quantity)
+                } else {
+                    String::new()
+                };
+                
+                let weight_text = format!(" [{:.1}kg]", item.weight * item.quantity as f32);
+                let value_text = format!(" {}gp", item.value * item.quantity);
+                
+                let line_text = format!("{}{}{} {}", 
+                    item.name, 
+                    quantity_text,
+                    weight_text,
+                    value_text
+                );
+                
+                item_lines.push(ListItem::new(line_text).style(style));
+            }
+            
+            if sorted_items.is_empty() {
+                item_lines.push(ListItem::new("No items in inventory").style(Style::default().fg(Color::DarkGray)));
+            }
+            
+            let item_list = List::new(item_lines)
+                .block(Block::default().borders(Borders::ALL).title("Items").border_style(Style::default().fg(Color::Green)))
+                .highlight_style(Style::default().bg(Color::DarkGray));
+            f.render_widget(item_list, left_chunks[1]);
+
+            // Weight capacity info
+            let current_weight: f32 = character.inventory.items.iter().map(|item| item.weight * item.quantity as f32).sum();
+            let max_weight = character.inventory.max_weight;
+            let weight_percentage = (current_weight / max_weight * 100.0) as u8;
+            
+            let weight_color = match weight_percentage {
+                0..=70 => Color::Green,
+                71..=90 => Color::Yellow,
+                _ => Color::Red,
+            };
+            
+            let weight_info = vec![
+                Line::from(format!("Weight: {:.1}/{:.1} kg ({}%)", current_weight, max_weight, weight_percentage)),
+                Line::from(""),
+                Line::from(format!("Total Items: {} | Total Value: {}gp", 
+                    character.inventory.items.len(), 
+                    character.inventory.items.iter().map(|item| item.value * item.quantity).sum::<u32>())),
+            ];
+            
+            let weight_panel = Paragraph::new(weight_info)
+                .style(Style::default().fg(weight_color))
+                .block(Block::default().borders(Borders::ALL).title("Capacity").border_style(Style::default().fg(weight_color)));
+            f.render_widget(weight_panel, left_chunks[2]);
+
+            // Equipment status
+            let equipped_items = vec![
+                Line::from(Span::styled("Current Equipment", Style::default().add_modifier(Modifier::BOLD))),
+                Line::from(""),
+                Line::from(format!("Weapon: {}", 
+                    character.equipment.weapon.as_ref().map(|w| w.name.as_str()).unwrap_or("None"))),
+                Line::from(format!("Armor: {}", 
+                    character.equipment.armor.as_ref().map(|a| a.name.as_str()).unwrap_or("None"))),
+                Line::from(format!("Shield: {}", 
+                    character.equipment.shield.as_ref().map(|s| s.name.as_str()).unwrap_or("None"))),
+                Line::from(format!("Accessory 1: {}", 
+                    character.equipment.accessory1.as_ref().map(|a| a.name.as_str()).unwrap_or("None"))),
+                Line::from(format!("Accessory 2: {}", 
+                    character.equipment.accessory2.as_ref().map(|a| a.name.as_str()).unwrap_or("None"))),
+            ];
+            
+            let equipment_panel = Paragraph::new(equipped_items)
+                .block(Block::default().borders(Borders::ALL).title("Equipment").border_style(Style::default().fg(Color::Cyan)));
+            f.render_widget(equipment_panel, right_chunks[0]);
+
+            // Item details - get selected item from sorted view
+            let details = if let Some((_, selected_item)) = sorted_items.get(inventory_state.selected_index) {
+                vec![
+                    Line::from(Span::styled(&selected_item.name, Style::default().add_modifier(Modifier::BOLD))),
+                    Line::from(""),
+                    Line::from(selected_item.description.as_str()),
+                    Line::from(""),
+                    Line::from(format!("Weight: {:.1} kg", selected_item.weight)),
+                    Line::from(format!("Value: {} gp", selected_item.value)),
+                    Line::from(format!("Quantity: {}", selected_item.quantity)),
+                    Line::from(""),
+                    Line::from(match &selected_item.item_type {
+                        crate::forge::ItemType::Weapon(_) => "Type: Weapon",
+                        crate::forge::ItemType::Armor(_) => "Type: Armor", 
+                        crate::forge::ItemType::Accessory(_) => "Type: Accessory",
+                        crate::forge::ItemType::Consumable(_) => "Type: Consumable",
+                        crate::forge::ItemType::Material(_) => "Type: Material",
+                        crate::forge::ItemType::Misc(_) => "Type: Misc",
+                    }),
+                ]
+            } else {
+                vec![Line::from("No item selected")]
+            };
+            
+            let details_panel = Paragraph::new(details)
+                .block(Block::default().borders(Borders::ALL).title("Item Details").border_style(Style::default().fg(Color::Magenta)))
+                .wrap(ratatui::widgets::Wrap { trim: true });
+            f.render_widget(details_panel, right_chunks[1]);
+
+            // Controls
+            let controls = Paragraph::new("↑↓/JK: Navigate | ENTER: Use/Equip | D: Drop | TAB: Sort | F: Filter | ESC: Back")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title("Controls").border_style(Style::default().fg(Color::DarkGray)));
+            f.render_widget(controls, left_chunks[3]);
+            
+        } else {
+            let no_char = Paragraph::new("No character loaded.")
+                .style(Style::default().fg(Color::Red))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title("Inventory").border_style(Style::default().fg(Color::Red)));
+            f.render_widget(no_char, area);
+        }
+    }
+
+    fn draw_equipment_static(f: &mut Frame, equipment_state: &EquipmentState, current_character: Option<&crate::forge::ForgeCharacter>) {
+        let area = f.size();
+        
+        if let Some(character) = current_character {
+            // Main layout: equipment slots, available items, item details
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(40), // Equipment slots
+                    Constraint::Percentage(35), // Available items
+                    Constraint::Percentage(25), // Item details
+                ])
+                .split(area);
+                
+            let left_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),  // Title
+                    Constraint::Min(0),     // Equipment slots
+                    Constraint::Length(3),  // Controls
+                ])
+                .split(main_chunks[0]);
+
+            // Title
+            let title = Paragraph::new("Equipment Management")
+                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)));
+            f.render_widget(title, left_chunks[0]);
+
+            // Equipment slots
+            let mut slot_lines = Vec::new();
+            
+            let slots = [
+                ("Weapon", matches!(equipment_state.selected_slot, EquipmentSlot::Weapon)),
+                ("Armor", matches!(equipment_state.selected_slot, EquipmentSlot::Armor)), 
+                ("Shield", matches!(equipment_state.selected_slot, EquipmentSlot::Shield)),
+                ("Accessory 1", matches!(equipment_state.selected_slot, EquipmentSlot::Accessory1)),
+                ("Accessory 2", matches!(equipment_state.selected_slot, EquipmentSlot::Accessory2)),
+            ];
+            
+            for (slot_name, selected) in slots {
+                let style = if selected {
+                    Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                
+                let item_name = match slot_name {
+                    "Weapon" => character.equipment.weapon.as_ref().map(|w| w.name.as_str()).unwrap_or("None"),
+                    "Armor" => character.equipment.armor.as_ref().map(|a| a.name.as_str()).unwrap_or("None"),
+                    "Shield" => character.equipment.shield.as_ref().map(|s| s.name.as_str()).unwrap_or("None"),
+                    "Accessory 1" => character.equipment.accessory1.as_ref().map(|a| a.name.as_str()).unwrap_or("None"),
+                    "Accessory 2" => character.equipment.accessory2.as_ref().map(|a| a.name.as_str()).unwrap_or("None"),
+                    _ => "None",
+                };
+                
+                slot_lines.push(ListItem::new(format!("{}: {}", slot_name, item_name)).style(style));
+            }
+            
+            let slot_list = List::new(slot_lines)
+                .block(Block::default().borders(Borders::ALL).title("Equipment Slots").border_style(Style::default().fg(Color::Green)));
+            f.render_widget(slot_list, left_chunks[1]);
+
+            // Available items for selected slot
+            let mut available_lines = Vec::new();
+            
+            for (i, item) in equipment_state.available_items.iter().enumerate() {
+                let selected = i == equipment_state.selected_item_index;
+                let style = if selected {
+                    Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                
+                available_lines.push(ListItem::new(item.name.as_str()).style(style));
+            }
+            
+            if equipment_state.available_items.is_empty() {
+                available_lines.push(ListItem::new("No compatible items").style(Style::default().fg(Color::DarkGray)));
+            }
+            
+            let slot_name = match equipment_state.selected_slot {
+                EquipmentSlot::Weapon => "Weapons",
+                EquipmentSlot::Armor => "Armor",
+                EquipmentSlot::Shield => "Shields", 
+                EquipmentSlot::Accessory1 | EquipmentSlot::Accessory2 => "Accessories",
+            };
+            
+            let available_list = List::new(available_lines)
+                .block(Block::default().borders(Borders::ALL).title(format!("Available {}", slot_name)).border_style(Style::default().fg(Color::Cyan)));
+            f.render_widget(available_list, main_chunks[1]);
+
+            // Item details
+            let details = if let Some(selected_item) = equipment_state.available_items.get(equipment_state.selected_item_index) {
+                vec![
+                    Line::from(Span::styled(&selected_item.name, Style::default().add_modifier(Modifier::BOLD))),
+                    Line::from(""),
+                    Line::from(selected_item.description.as_str()),
+                    Line::from(""),
+                    Line::from(format!("Weight: {:.1} kg", selected_item.weight)),
+                    Line::from(format!("Value: {} gp", selected_item.value)),
+                ]
+            } else {
+                vec![Line::from("No item selected")]
+            };
+            
+            let details_panel = Paragraph::new(details)
+                .block(Block::default().borders(Borders::ALL).title("Item Details").border_style(Style::default().fg(Color::Magenta)))
+                .wrap(ratatui::widgets::Wrap { trim: true });
+            f.render_widget(details_panel, main_chunks[2]);
+
+            // Controls
+            let controls = Paragraph::new("↑↓/JK: Navigate Slots | ←→/HL: Navigate Items | ENTER: Equip | U: Unequip | ESC: Back")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title("Controls").border_style(Style::default().fg(Color::DarkGray)));
+            f.render_widget(controls, left_chunks[2]);
+            
+        } else {
+            let no_char = Paragraph::new("No character loaded.")
+                .style(Style::default().fg(Color::Red))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title("Equipment").border_style(Style::default().fg(Color::Red)));
+            f.render_widget(no_char, area);
+        }
     }
 }

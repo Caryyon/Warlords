@@ -212,6 +212,14 @@ pub struct LootItem {
     pub quantity: u32,
     pub value: u32, // In gold pieces
     pub description: String,
+    pub equipment_data: Option<EquipmentData>, // For weapons/armor/accessories
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EquipmentData {
+    Weapon(crate::forge::Weapon),
+    Armor(crate::forge::Armor),
+    Accessory(crate::forge::Accessory),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +237,7 @@ pub enum LootItemType {
     SpellComponent, // Magical reagents
     Tool,
     Trinket,
+    Accessory,
 }
 
 pub struct DungeonGenerator;
@@ -871,42 +880,109 @@ impl DungeonCorpse {
         }
     }
     
-    fn get_interactions_for_creature(creature_type: &CreatureType) -> Vec<CorpseInteraction> {
-        let mut interactions = vec![CorpseInteraction::Examine, CorpseInteraction::Loot];
+    pub fn advance_decay(&mut self) {
+        if self.decay_level < 10 {
+            self.decay_level += 1;
+            
+            // Update available interactions based on decay level
+            self.interactions = Self::get_interactions_for_decay(
+                &self.creature_type, 
+                self.decay_level,
+                self.loot_generated
+            );
+        }
+    }
+    
+    pub fn is_completely_decayed(&self) -> bool {
+        self.decay_level >= 10
+    }
+    
+    pub fn get_decay_description(&self) -> String {
+        match self.decay_level {
+            0..=1 => format!("Fresh corpse of {}", self.name),
+            2..=3 => format!("Recently deceased {}", self.name),
+            4..=5 => format!("Decaying corpse of {}", self.name),
+            6..=7 => format!("Rotting remains of {}", self.name),
+            8..=9 => format!("Skeletal remains of {}", self.name),
+            _ => format!("Ancient bones that were once {}", self.name),
+        }
+    }
+    
+    fn get_interactions_for_decay(creature_type: &CreatureType, decay_level: u8, loot_generated: bool) -> Vec<CorpseInteraction> {
+        let mut interactions = vec![CorpseInteraction::Examine];
         
-        match creature_type {
-            CreatureType::Rat | CreatureType::Bat | CreatureType::WildAnimal => {
-                interactions.push(CorpseInteraction::Skin);
-            }
-            CreatureType::Skeleton => {
-                interactions.push(CorpseInteraction::Harvest); // Bone collection
-            }
-            CreatureType::Zombie => {
-                interactions.push(CorpseInteraction::RaiseSkeleton);
-                interactions.push(CorpseInteraction::Burn);
-            }
-            CreatureType::Ghost => {
-                interactions.push(CorpseInteraction::Harvest); // Ectoplasm
-            }
-            CreatureType::Spider => {
-                interactions.push(CorpseInteraction::Harvest); // Venom sacs
-                interactions.push(CorpseInteraction::Skin); // Chitin
-            }
-            CreatureType::Goblin | CreatureType::Orc | CreatureType::Bandit => {
-                interactions.push(CorpseInteraction::RaiseSkeleton);
-                interactions.push(CorpseInteraction::RaiseZombie);
-            }
-            CreatureType::Construct => {
-                interactions.push(CorpseInteraction::Harvest); // Magical components
-            }
-            _ => {}
+        // Only allow looting if not already looted
+        if !loot_generated {
+            interactions.push(CorpseInteraction::Loot);
         }
         
-        interactions.push(CorpseInteraction::Burn); // Can always burn corpses
+        // Interactions change based on decay level
+        match decay_level {
+            0..=2 => {
+                // Fresh corpse - all interactions available
+                match creature_type {
+                    CreatureType::Rat | CreatureType::Bat | CreatureType::WildAnimal => {
+                        interactions.push(CorpseInteraction::Skin);
+                    }
+                    CreatureType::Zombie => {
+                        interactions.push(CorpseInteraction::RaiseZombie);
+                        interactions.push(CorpseInteraction::RaiseSkeleton);
+                    }
+                    CreatureType::Ghost => {
+                        interactions.push(CorpseInteraction::Harvest);
+                    }
+                    CreatureType::Spider => {
+                        interactions.push(CorpseInteraction::Harvest);
+                        interactions.push(CorpseInteraction::Skin);
+                    }
+                    CreatureType::Goblin | CreatureType::Orc | CreatureType::Bandit => {
+                        interactions.push(CorpseInteraction::RaiseZombie);
+                        interactions.push(CorpseInteraction::RaiseSkeleton);
+                    }
+                    CreatureType::Construct => {
+                        interactions.push(CorpseInteraction::Harvest);
+                    }
+                    _ => {}
+                }
+            }
+            3..=5 => {
+                // Decaying corpse - limited interactions
+                match creature_type {
+                    CreatureType::Rat | CreatureType::Bat | CreatureType::WildAnimal => {
+                        // Can still skin, but quality reduced
+                        interactions.push(CorpseInteraction::Skin);
+                    }
+                    CreatureType::Spider => {
+                        interactions.push(CorpseInteraction::Harvest); // Venom sacs still good
+                    }
+                    CreatureType::Zombie | CreatureType::Goblin | CreatureType::Orc | CreatureType::Bandit => {
+                        interactions.push(CorpseInteraction::RaiseSkeleton); // Too decayed for zombie
+                    }
+                    _ => {}
+                }
+            }
+            6..=9 => {
+                // Skeletal remains - only bone harvest
+                interactions.push(CorpseInteraction::Harvest); // Bone collection
+            }
+            _ => {
+                // Completely decayed - only examination
+            }
+        }
+        
+        // Always allow burning
+        interactions.push(CorpseInteraction::Burn);
+        
         interactions
     }
     
-    pub fn generate_loot(&self) -> Vec<LootItem> {
+    fn get_interactions_for_creature(creature_type: &CreatureType) -> Vec<CorpseInteraction> {
+        // This method is now just a wrapper for fresh corpses
+        Self::get_interactions_for_decay(creature_type, 0, false)
+    }
+    
+    
+    pub fn generate_loot(&mut self) -> Vec<LootItem> {
         use rand::Rng;
         let mut rng = rand::thread_rng();
         let mut loot = Vec::new();
@@ -926,6 +1002,7 @@ impl DungeonCorpse {
                 quantity: gold_amount,
                 value: gold_amount,
                 description: "Shiny gold coins".to_string(),
+                equipment_data: None,
             });
         }
         
@@ -939,6 +1016,7 @@ impl DungeonCorpse {
                         quantity: 1,
                         value: 2,
                         description: "A rat's tail, useful for certain potions".to_string(),
+                        equipment_data: None,
                     });
                 }
             }
@@ -950,6 +1028,7 @@ impl DungeonCorpse {
                         quantity: rng.gen_range(1..4),
                         value: 5,
                         description: "Strong spider silk for crafting".to_string(),
+                        equipment_data: None,
                     });
                 }
                 if rng.gen_bool(0.2) { // 20% chance
@@ -959,6 +1038,7 @@ impl DungeonCorpse {
                         quantity: 1,
                         value: 10,
                         description: "Spider venom for poison crafting".to_string(),
+                        equipment_data: None,
                     });
                 }
             }
@@ -970,33 +1050,196 @@ impl DungeonCorpse {
                         quantity: rng.gen_range(1..3),
                         value: 3,
                         description: "Well-preserved bone suitable for necromancy".to_string(),
+                        equipment_data: None,
                     });
                 }
             }
             CreatureType::Bandit => {
                 if rng.gen_bool(0.6) { // 60% chance for weapon
-                    let weapons = vec!["Rusty Sword", "Wooden Club", "Iron Dagger"];
-                    let weapon = weapons[rng.gen_range(0..weapons.len())];
+                    let weapon_obj = match rng.gen_range(0..4) {
+                        0 => crate::forge::Weapon::rusty_sword(),
+                        1 => crate::forge::Weapon::iron_mace(),
+                        2 => crate::forge::Weapon::dagger(),
+                        _ => crate::forge::Weapon::short_bow(),
+                    };
+                    
                     loot.push(LootItem {
-                        name: weapon.to_string(),
+                        name: weapon_obj.name.clone(),
                         item_type: LootItemType::Weapon,
                         quantity: 1,
-                        value: rng.gen_range(10..25),
-                        description: format!("A {}", weapon.to_lowercase()),
+                        value: rng.gen_range(15..35),
+                        description: format!("A {}", weapon_obj.name.to_lowercase()),
+                        equipment_data: Some(EquipmentData::Weapon(weapon_obj)),
                     });
                 }
                 if rng.gen_bool(0.3) { // 30% chance for armor
+                    let armor_obj = match rng.gen_range(0..3) {
+                        0 => crate::forge::Armor::leather(),
+                        1 => crate::forge::Armor::studded_leather(),
+                        _ => crate::forge::Armor::small_shield(),
+                    };
+                    
                     loot.push(LootItem {
-                        name: "Leather Armor".to_string(),
+                        name: armor_obj.name.clone(),
                         item_type: LootItemType::Armor,
                         quantity: 1,
-                        value: rng.gen_range(15..30),
-                        description: "Worn leather armor".to_string(),
+                        value: armor_obj.armor_rating as u32 * 15,
+                        description: format!("Worn {}", armor_obj.name.to_lowercase()),
+                        equipment_data: Some(EquipmentData::Armor(armor_obj)),
+                    });
+                }
+            }
+            CreatureType::Orc => {
+                if rng.gen_bool(0.5) { // 50% chance for weapon
+                    let weapon_obj = match rng.gen_range(0..3) {
+                        0 => crate::forge::Weapon::iron_mace(),
+                        1 => crate::forge::Weapon::war_axe(),
+                        _ => crate::forge::Weapon::iron_sword(),
+                    };
+                    
+                    loot.push(LootItem {
+                        name: weapon_obj.name.clone(),
+                        item_type: LootItemType::Weapon,
+                        quantity: 1,
+                        value: rng.gen_range(20..45),
+                        description: format!("A crude {}", weapon_obj.name.to_lowercase()),
+                        equipment_data: Some(EquipmentData::Weapon(weapon_obj)),
+                    });
+                }
+                if rng.gen_bool(0.4) { // 40% chance for armor
+                    let armor_obj = match rng.gen_range(0..2) {
+                        0 => crate::forge::Armor::studded_leather(),
+                        _ => crate::forge::Armor::small_shield(),
+                    };
+                    
+                    loot.push(LootItem {
+                        name: armor_obj.name.clone(),
+                        item_type: LootItemType::Armor,
+                        quantity: 1,
+                        value: armor_obj.armor_rating as u32 * 12,
+                        description: format!("Battered {}", armor_obj.name.to_lowercase()),
+                        equipment_data: Some(EquipmentData::Armor(armor_obj)),
+                    });
+                }
+            }
+            CreatureType::Goblin => {
+                if rng.gen_bool(0.4) { // 40% chance for weapon
+                    let weapon_obj = match rng.gen_range(0..3) {
+                        0 => crate::forge::Weapon::dagger(),
+                        1 => crate::forge::Weapon::short_bow(),
+                        _ => crate::forge::Weapon::rusty_sword(),
+                    };
+                    
+                    loot.push(LootItem {
+                        name: weapon_obj.name.clone(),
+                        item_type: LootItemType::Weapon,
+                        quantity: 1,
+                        value: rng.gen_range(8..20),
+                        description: format!("A makeshift {}", weapon_obj.name.to_lowercase()),
+                        equipment_data: Some(EquipmentData::Weapon(weapon_obj)),
+                    });
+                }
+                if rng.gen_bool(0.2) { // 20% chance for armor
+                    let armor_obj = crate::forge::Armor::leather();
+                    
+                    loot.push(LootItem {
+                        name: armor_obj.name.clone(),
+                        item_type: LootItemType::Armor,
+                        quantity: 1,
+                        value: armor_obj.armor_rating as u32 * 8,
+                        description: format!("Patchy {}", armor_obj.name.to_lowercase()),
+                        equipment_data: Some(EquipmentData::Armor(armor_obj)),
                     });
                 }
             }
             _ => {}
         }
+        
+        // Rare equipment drops (5% chance for any creature)
+        if rng.gen_bool(0.05) {
+            match rng.gen_range(0..3) {
+                0 => {
+                    // Rare weapon drop
+                    let weapon_obj = match rng.gen_range(0..3) {
+                        0 => crate::forge::Weapon::steel_sword(),
+                        1 => crate::forge::Weapon::war_axe(),
+                        _ => crate::forge::Weapon::short_bow(),
+                    };
+                    
+                    loot.push(LootItem {
+                        name: weapon_obj.name.clone(),
+                        item_type: LootItemType::Weapon,
+                        quantity: 1,
+                        value: rng.gen_range(50..100),
+                        description: format!("A well-crafted {}", weapon_obj.name.to_lowercase()),
+                        equipment_data: Some(EquipmentData::Weapon(weapon_obj)),
+                    });
+                }
+                1 => {
+                    // Rare armor drop
+                    let armor_obj = match rng.gen_range(0..2) {
+                        0 => crate::forge::Armor::chain_mail(),
+                        _ => crate::forge::Armor::large_shield(),
+                    };
+                    
+                    loot.push(LootItem {
+                        name: armor_obj.name.clone(),
+                        item_type: LootItemType::Armor,
+                        quantity: 1,
+                        value: armor_obj.armor_rating as u32 * 25,
+                        description: format!("A masterwork {}", armor_obj.name.to_lowercase()),
+                        equipment_data: Some(EquipmentData::Armor(armor_obj)),
+                    });
+                }
+                _ => {
+                    // Rare accessory drop
+                    let accessory_obj = match rng.gen_range(0..3) {
+                        0 => crate::forge::Accessory {
+                            name: "Silver Ring of Protection".to_string(),
+                            accessory_type: crate::forge::AccessoryType::Ring,
+                            stat_bonuses: crate::forge::StatBonuses {
+                                defense_bonus: 2,
+                                ..crate::forge::StatBonuses::new()
+                            },
+                            magical: true,
+                        },
+                        1 => {
+                            let mut bonuses = crate::forge::StatBonuses::new();
+                            bonuses.characteristic_bonuses.insert("STR".to_string(), 1);
+                            crate::forge::Accessory {
+                                name: "Amulet of Strength".to_string(),
+                                accessory_type: crate::forge::AccessoryType::Amulet,
+                                stat_bonuses: bonuses,
+                                magical: true,
+                            }
+                        },
+                        _ => {
+                            let mut bonuses = crate::forge::StatBonuses::new();
+                            bonuses.characteristic_bonuses.insert("SPD".to_string(), 1);
+                            crate::forge::Accessory {
+                                name: "Boots of Speed".to_string(),
+                                accessory_type: crate::forge::AccessoryType::Boots,
+                                stat_bonuses: bonuses,
+                                magical: true,
+                            }
+                        },
+                    };
+                    
+                    loot.push(LootItem {
+                        name: accessory_obj.name.clone(),
+                        item_type: LootItemType::Accessory,
+                        quantity: 1,
+                        value: rng.gen_range(75..150),
+                        description: format!("A magical {}", accessory_obj.name.to_lowercase()),
+                        equipment_data: Some(EquipmentData::Accessory(accessory_obj)),
+                    });
+                }
+            }
+        }
+        
+        // Mark corpse as looted and update interactions
+        self.loot_generated = true;
+        self.interactions = Self::get_interactions_for_decay(&self.creature_type, self.decay_level, true);
         
         loot
     }

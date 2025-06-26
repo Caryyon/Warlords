@@ -6,6 +6,209 @@ use crate::database::CharacterDatabase;
 use crate::world::{WorldManager, WorldCoord, LocalCoord};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::PathBuf;
+use std::collections::HashMap;
+
+// Centralized key binding system to prevent conflicts
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GameContext {
+    WorldExploration,
+    DungeonExploration,
+    CharacterMenu,
+    InventoryManagement,
+    EquipmentManagement,
+    Combat,
+    CharacterCreation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GameAction {
+    // Movement
+    MoveNorth,
+    MoveSouth,
+    MoveEast,
+    MoveWest,
+    
+    // UI Navigation
+    NavigateUp,
+    NavigateDown,
+    NavigateLeft,
+    NavigateRight,
+    
+    // Core Actions
+    Confirm,
+    Cancel,
+    Inspect,
+    
+    // Inventory & Equipment
+    OpenInventory,
+    OpenEquipment,
+    SortItems,
+    FilterItems,
+    DropItem,
+    UseItem,
+    EquipItem,
+    UnequipItem,
+    
+    // Character & Menu
+    OpenCharacterMenu,
+    OpenMap,
+    Rest,
+    Save,
+    Quit,
+    
+    // Combat
+    Attack,
+    Defend,
+    UseSkill,
+    Flee,
+    
+    // Exploration
+    Search,
+    Enter,
+    Climb,
+    Light,
+}
+
+pub struct KeyBindings {
+    bindings: HashMap<(GameContext, KeyCode), GameAction>,
+    conflicts: Vec<(GameContext, KeyCode, Vec<GameAction>)>,
+}
+
+impl KeyBindings {
+    pub fn new() -> Self {
+        let mut kb = KeyBindings {
+            bindings: HashMap::new(),
+            conflicts: Vec::new(),
+        };
+        kb.setup_default_bindings();
+        kb
+    }
+    
+    fn bind(&mut self, context: GameContext, key: KeyCode, action: GameAction) {
+        let key_binding = (context.clone(), key);
+        
+        // Check for conflicts within the same context
+        if let Some(existing_action) = self.bindings.get(&key_binding) {
+            if existing_action != &action {
+                // Record conflict for later resolution
+                let conflict_entry = self.conflicts.iter_mut()
+                    .find(|(ctx, k, _)| ctx == &context && k == &key);
+                    
+                if let Some((_, _, actions)) = conflict_entry {
+                    if !actions.contains(&action) {
+                        actions.push(action.clone());
+                    }
+                } else {
+                    self.conflicts.push((context.clone(), key, vec![existing_action.clone(), action.clone()]));
+                }
+            }
+        }
+        
+        self.bindings.insert(key_binding, action);
+    }
+    
+    pub fn get_action(&self, context: &GameContext, key: KeyCode) -> Option<&GameAction> {
+        self.bindings.get(&(context.clone(), key))
+    }
+    
+    pub fn check_conflicts(&self) -> &Vec<(GameContext, KeyCode, Vec<GameAction>)> {
+        &self.conflicts
+    }
+    
+    fn setup_default_bindings(&mut self) {
+        use GameContext::*;
+        use GameAction::*;
+        
+        // Movement keys (consistent across exploration contexts)
+        for context in [WorldExploration, DungeonExploration] {
+            self.bind(context.clone(), KeyCode::Char('w'), MoveNorth);
+            self.bind(context.clone(), KeyCode::Up, MoveNorth);
+            self.bind(context.clone(), KeyCode::Char('s'), MoveSouth);
+            self.bind(context.clone(), KeyCode::Down, MoveSouth);
+            self.bind(context.clone(), KeyCode::Char('a'), MoveWest);
+            self.bind(context.clone(), KeyCode::Left, MoveWest);
+            self.bind(context.clone(), KeyCode::Char('d'), MoveEast);
+            self.bind(context.clone(), KeyCode::Right, MoveEast);
+            
+            // Common exploration actions
+            self.bind(context.clone(), KeyCode::Char('m'), OpenCharacterMenu);
+            self.bind(context.clone(), KeyCode::Char('i'), Inspect);
+            self.bind(context.clone(), KeyCode::Char('b'), OpenInventory); // 'b' for bag - no conflict!
+            self.bind(context.clone(), KeyCode::Enter, Enter);
+            self.bind(context.clone(), KeyCode::Char(' '), Search);
+            self.bind(context.clone(), KeyCode::Char('r'), Rest);
+            self.bind(context.clone(), KeyCode::Char('l'), Light);
+            self.bind(context, KeyCode::Esc, Cancel);
+        }
+        
+        // Character menu
+        self.bind(CharacterMenu, KeyCode::Char('i'), OpenInventory);
+        self.bind(CharacterMenu, KeyCode::Char('e'), OpenEquipment);
+        self.bind(CharacterMenu, KeyCode::Char('m'), Cancel);
+        self.bind(CharacterMenu, KeyCode::Esc, Cancel);
+        self.bind(CharacterMenu, KeyCode::Char('q'), Quit);
+        
+        // Inventory management
+        self.bind(InventoryManagement, KeyCode::Up, NavigateUp);
+        self.bind(InventoryManagement, KeyCode::Down, NavigateDown);
+        self.bind(InventoryManagement, KeyCode::Char('k'), NavigateUp);    // Vim up
+        self.bind(InventoryManagement, KeyCode::Char('j'), NavigateDown);  // Vim down
+        self.bind(InventoryManagement, KeyCode::Enter, UseItem);
+        self.bind(InventoryManagement, KeyCode::Char('d'), DropItem);
+        self.bind(InventoryManagement, KeyCode::Tab, SortItems); // Changed from 's' to Tab
+        self.bind(InventoryManagement, KeyCode::Char('f'), FilterItems);
+        self.bind(InventoryManagement, KeyCode::Esc, Cancel);
+        
+        // Equipment management  
+        self.bind(EquipmentManagement, KeyCode::Up, NavigateUp);
+        self.bind(EquipmentManagement, KeyCode::Down, NavigateDown);
+        self.bind(EquipmentManagement, KeyCode::Left, NavigateLeft);
+        self.bind(EquipmentManagement, KeyCode::Right, NavigateRight);
+        self.bind(EquipmentManagement, KeyCode::Char('k'), NavigateUp);    // Vim up
+        self.bind(EquipmentManagement, KeyCode::Char('j'), NavigateDown);  // Vim down
+        self.bind(EquipmentManagement, KeyCode::Char('h'), NavigateLeft);  // Vim left
+        self.bind(EquipmentManagement, KeyCode::Char('l'), NavigateRight); // Vim right
+        self.bind(EquipmentManagement, KeyCode::Enter, EquipItem);
+        self.bind(EquipmentManagement, KeyCode::Char('u'), UnequipItem);
+        self.bind(EquipmentManagement, KeyCode::Esc, Cancel);
+        
+        // Combat
+        self.bind(Combat, KeyCode::Char('a'), Attack);
+        self.bind(Combat, KeyCode::Char('d'), Defend);
+        self.bind(Combat, KeyCode::Char('s'), UseSkill);
+        self.bind(Combat, KeyCode::Char('f'), Flee);
+        self.bind(Combat, KeyCode::Up, NavigateUp);
+        self.bind(Combat, KeyCode::Down, NavigateDown);
+        self.bind(Combat, KeyCode::Char('k'), NavigateUp);    // Vim up
+        self.bind(Combat, KeyCode::Char('j'), NavigateDown);  // Vim down
+        self.bind(Combat, KeyCode::Enter, Confirm);
+        self.bind(Combat, KeyCode::Esc, Cancel);
+    }
+    
+    pub fn print_bindings(&self, context: &GameContext) {
+        println!("=== Key Bindings for {:?} ===", context);
+        let mut context_bindings: Vec<_> = self.bindings.iter()
+            .filter(|((ctx, _), _)| ctx == context)
+            .collect();
+        context_bindings.sort_by_key(|((_, key), _)| format!("{:?}", key));
+        
+        for ((_, key), action) in context_bindings {
+            println!("{:?} -> {:?}", key, action);
+        }
+    }
+    
+    pub fn print_all_conflicts(&self) {
+        if self.conflicts.is_empty() {
+            println!("✅ No key binding conflicts detected!");
+            return;
+        }
+        
+        println!("⚠️  Key Binding Conflicts Detected:");
+        for (context, key, actions) in &self.conflicts {
+            println!("  {:?} + {:?} -> {:?}", context, key, actions);
+        }
+    }
+}
 
 pub struct Game {
     ui: GameUI,
@@ -17,6 +220,7 @@ pub struct Game {
     world_manager: Option<WorldManager>,
     player_position: WorldCoord,
     saved_world_state: Option<WorldExplorationState>,
+    key_bindings: KeyBindings,
 }
 
 impl Game {
@@ -24,6 +228,10 @@ impl Game {
         let ui = GameUI::new()?;
         let db_path = PathBuf::from("characters.json");
         let database = CharacterDatabase::load_or_create(&db_path)?;
+        let key_bindings = KeyBindings::new();
+        
+        // Check for key binding conflicts at startup
+        key_bindings.print_all_conflicts();
         
         Ok(Game {
             ui,
@@ -35,6 +243,7 @@ impl Game {
             world_manager: None,
             player_position: WorldCoord::new(256, 256), // Start in center of world
             saved_world_state: None,
+            key_bindings,
         })
     }
 
@@ -229,11 +438,41 @@ impl Game {
                     KeyCode::Esc | KeyCode::Char('m') => {
                         self.state = UIState::Playing;
                     }
+                    KeyCode::Char('i') => {
+                        // Enter inventory management
+                        let inventory_state = crate::ui::InventoryState {
+                            selected_index: 0,
+                            scroll_offset: 0,
+                            view_mode: crate::ui::InventoryViewMode::List,
+                            sort_mode: crate::ui::InventorySortMode::Name,
+                            filter_type: None,
+                            showing_details: false,
+                            selected_item_details: None,
+                            sorted_indices: Vec::new(),
+                        };
+                        self.state = UIState::InventoryManagement(inventory_state);
+                    }
+                    KeyCode::Char('e') => {
+                        // Enter equipment management
+                        let equipment_state = crate::ui::EquipmentState {
+                            selected_slot: crate::ui::EquipmentSlot::Weapon,
+                            showing_details: false,
+                            available_items: Vec::new(), // Will be populated based on selected slot
+                            selected_item_index: 0,
+                        };
+                        self.state = UIState::EquipmentManagement(equipment_state);
+                    }
                     KeyCode::Char('q') => {
                         return Ok(true); // Exit
                     }
                     _ => {}
                 }
+            }
+            UIState::InventoryManagement(inventory_state) => {
+                self.handle_inventory_input(key, inventory_state.clone())?;
+            }
+            UIState::EquipmentManagement(equipment_state) => {
+                self.handle_equipment_input(key, equipment_state.clone())?;
             }
             UIState::Combat(combat_state) => {
                 self.handle_combat_input(key, combat_state.clone())?;
@@ -770,7 +1009,20 @@ impl Game {
         
         // Apply selected gear to inventory
         for gear in &creation_state.selected_gear {
-            character.inventory.push(gear.clone());
+            // For now, just add gear as misc items until we have proper gear definitions
+            let gear_item = crate::forge::InventoryItem {
+                name: gear.clone(),
+                item_type: crate::forge::ItemType::Misc(crate::forge::MiscItem {
+                    misc_type: crate::forge::MiscType::Trade,
+                    special_properties: vec!["Starting gear".to_string()],
+                }),
+                weight: 1.0,
+                stack_size: 1,
+                quantity: 1,
+                value: 10,
+                description: "Starting equipment".to_string(),
+            };
+            character.inventory.add_item(gear_item).ok();
         }
         
         // Set remaining gold (starting gold - spent gold)
@@ -1025,7 +1277,9 @@ impl Game {
         skills.push("Flee".to_string());
         
         // Add item usage if character has healing items
-        if character.inventory.iter().any(|item| item.contains("Potion")) {
+        if character.inventory.items.iter().any(|item| {
+            item.name.contains("Potion") && matches!(item.item_type, crate::forge::ItemType::Consumable(_))
+        }) {
             skills.push("Use Item".to_string());
         }
         
@@ -1268,23 +1522,39 @@ impl Game {
         
         let attacker_index = combat_state.encounter.current_turn;
         
-        // Get skill level for the player
-        let skill_level = if let Some(character) = &self.current_character {
-            character.skills.get(skill_name).copied().unwrap_or(0)
+        // Get skill and equipment bonuses for the player
+        let (skill_bonus, equipment_bonus) = if let Some(character) = &self.current_character {
+            use crate::forge::SkillType;
+            let skill_bonus = match crate::forge::ForgeCharacter::get_skill_type(skill_name) {
+                SkillType::Combat => {
+                    let (level, percentage) = character.get_combat_skill_info(skill_name);
+                    // Combat skills: Level provides major bonus, percentage provides minor bonus
+                    (level as i32 * 5) + (percentage as i32 / 10)
+                }
+                SkillType::Percentage => {
+                    let percentage = character.skills.get(skill_name).copied().unwrap_or(0);
+                    // Percentage skills: Every 10% gives +1 bonus
+                    percentage as i32 / 10
+                }
+                SkillType::Magic => 0, // Magic skills don't affect melee combat
+            };
+            
+            // Get equipment bonuses
+            let equipment_bonuses = character.get_total_equipment_bonuses();
+            
+            (skill_bonus, equipment_bonuses.attack_bonus as i32)
         } else {
-            0
+            (0, 0)
         };
-        
-        // Calculate attack bonus based on skill
-        let skill_bonus = skill_level / 2; // Every 2 skill levels = +1 to attack
         
         // Get base stats
         let attack_value = combat_state.encounter.participants[attacker_index].get_total_attack_value();
         let defense_value = combat_state.encounter.participants[target_index].get_total_defense_value();
         
-        // Roll attack with skill bonus
+        // Roll attack with skill and equipment bonuses
         let attack_roll = rng.gen_range(1..=20);
-        let total_attack = attack_roll + attack_value + skill_bonus;
+        let total_bonus = skill_bonus + equipment_bonus;
+        let total_attack = attack_roll + attack_value + total_bonus as u8;
         
         let attacker_name = combat_state.encounter.participants[attacker_index].name.clone();
         let target_name = combat_state.encounter.participants[target_index].name.clone();
@@ -1292,8 +1562,14 @@ impl Game {
         // Check for critical hit (natural 20)
         let critical = attack_roll == 20;
         
-        let log_message = format!("{} uses {} (skill level {}) against {}!", 
-            attacker_name, skill_name, skill_level, target_name);
+        let skill_display = if let Some(character) = &self.current_character {
+            character.get_skill_display(skill_name)
+        } else {
+            "0%".to_string()
+        };
+        
+        let log_message = format!("{} uses {} ({}) against {}!", 
+            attacker_name, skill_name, skill_display, target_name);
         combat_state.encounter.add_log(log_message);
         
         // Check for hit
@@ -1303,14 +1579,19 @@ impl Game {
                 .unwrap_or_else(Weapon::unarmed);
             let (mut damage, dice_count) = weapon.roll_damage();
             
-            // Add damage bonus from character and skill
-            let damage_bonus = combat_state.encounter.participants[attacker_index].get_total_damage_bonus();
-            let skill_damage_bonus = if skill_level >= 5 { 1 } else { 0 }; // Bonus damage at higher skill levels
+            // Add damage bonus from character, skill, and equipment
+            let character_damage_bonus = combat_state.encounter.participants[attacker_index].get_total_damage_bonus();
+            let skill_damage_bonus = if total_bonus >= 5 { 1 } else { 0 }; // Bonus damage at higher skill levels
+            let equipment_damage_bonus = if let Some(character) = &self.current_character {
+                character.get_total_equipment_bonuses().damage_bonus
+            } else { 0 };
             
-            if damage_bonus >= 0 {
-                damage += damage_bonus as u32 + skill_damage_bonus;
+            let total_damage_bonus = character_damage_bonus + equipment_damage_bonus + skill_damage_bonus as i8;
+            
+            if total_damage_bonus >= 0 {
+                damage += total_damage_bonus as u32;
             } else {
-                damage = damage.saturating_sub(damage_bonus.abs() as u32);
+                damage = damage.saturating_sub(total_damage_bonus.abs() as u32);
             }
             
             // Double damage on critical
@@ -1338,24 +1619,34 @@ impl Game {
                 combat_state.encounter.add_log(format!("{} has been defeated!", target_name));
             }
             
-            // Award skill pip for successful attack
+            // Award skill pip for successful attack (Traditional Forge advancement)
             let skill_name_clone = skill_name.to_string();
             if let Some(character) = &mut self.current_character {
-                // Award a skill pip for successful use (simplified Forge advancement)
                 let current_pips = character.skill_pips.get(&skill_name_clone).copied().unwrap_or(0);
-                let current_level = character.skills.get(&skill_name_clone).copied().unwrap_or(0);
-                
-                // Need (current_level + 1) pips to advance to next level
-                let pips_needed = current_level + 1;
                 let new_pips = current_pips + 1;
+                character.skill_pips.insert(skill_name_clone.clone(), new_pips);
                 
-                if new_pips >= pips_needed {
-                    // Level up the skill
-                    character.skills.insert(skill_name_clone.clone(), current_level + 1);
-                    character.skill_pips.insert(skill_name_clone.clone(), 0); // Reset pips
-                    combat_state.encounter.add_log(format!("Skill {} increased to level {}!", skill_name_clone, current_level + 1));
-                } else {
-                    character.skill_pips.insert(skill_name_clone, new_pips);
+                // Check if we have enough pips to trigger advancement (minimum 1 pip)
+                if new_pips >= 1 {
+                    let result = character.advance_skill_with_pips(&skill_name_clone, new_pips);
+                    
+                    if result.new_value > result.old_value {
+                        if result.leveled_up {
+                            combat_state.encounter.add_log(format!("🎉 {} skill leveled up! {}% → {}% (Level {})", 
+                                result.skill_name, result.old_value, result.new_value, 
+                                character.get_combat_skill_info(&skill_name_clone).0));
+                        } else {
+                            combat_state.encounter.add_log(format!("📈 {} skill improved! {}% → {}%", 
+                                result.skill_name, result.old_value, result.new_value));
+                        }
+                        
+                        // Show some of the advancement rolls
+                        let success_count = result.rolls.iter().filter(|(_, success)| *success).count();
+                        if success_count > 0 {
+                            combat_state.encounter.add_log(format!("Advancement rolls: {}/{} successful", 
+                                success_count, result.rolls.len()));
+                        }
+                    }
                 }
             }
         } else {
@@ -1600,7 +1891,7 @@ impl Game {
             floor.creatures.retain(|creature| {
                 if defeated_enemy_names.contains(&creature.name) {
                     // Create corpse at creature's position
-                    let corpse = crate::world::DungeonCorpse::new(
+                    let mut corpse = crate::world::DungeonCorpse::new(
                         creature.position,
                         creature.creature_type.clone(),
                         creature.name.clone(),
@@ -1733,6 +2024,23 @@ impl Game {
                 // Return to main menu
                 self.state = UIState::Playing;
             }
+            KeyCode::Char('b') => {
+                // Quick access to inventory (bag)
+                if self.current_character.is_some() {
+                    let inventory_state = crate::ui::InventoryState {
+                        selected_index: 0,
+                        scroll_offset: 0,
+                        view_mode: crate::ui::InventoryViewMode::List,
+                        sort_mode: crate::ui::InventorySortMode::Name,
+                        filter_type: None,
+                        showing_details: false,
+                        selected_item_details: None,
+                        sorted_indices: Vec::new(),
+                    };
+                    self.saved_world_state = Some(world_state.clone());
+                    self.state = UIState::InventoryManagement(inventory_state);
+                }
+            }
             KeyCode::Char('f') => {
                 // Start combat at current location
                 if let Some(character) = &self.current_character {
@@ -1860,13 +2168,38 @@ impl Game {
                 // Toggle torch
                 self.toggle_torch(&mut dungeon_state)?;
             }
+            KeyCode::Char('b') => {
+                // Quick access to inventory (bag)
+                if self.current_character.is_some() {
+                    let inventory_state = crate::ui::InventoryState {
+                        selected_index: 0,
+                        scroll_offset: 0,
+                        view_mode: crate::ui::InventoryViewMode::List,
+                        sort_mode: crate::ui::InventorySortMode::Name,
+                        filter_type: None,
+                        showing_details: false,
+                        selected_item_details: None,
+                        sorted_indices: Vec::new(),
+                    };
+                    // Note: We'll need to handle returning to dungeon from inventory
+                    self.state = UIState::InventoryManagement(inventory_state);
+                }
+            }
             KeyCode::Char('q') => {
                 return Ok(true); // Exit game
             }
             // Handle any other character input to prevent random text from appearing
             KeyCode::Char(c) => {
-                // Add a message for unrecognized commands
-                self.add_dungeon_message(&mut dungeon_state, format!("Unknown command: '{}'. Press H for help.", c));
+                // Check if it's a number key and player is on a corpse
+                if c.is_ascii_digit() {
+                    let digit = c.to_digit(10).unwrap() as usize;
+                    if digit >= 1 && digit <= 9 {
+                        self.handle_corpse_number_key(&mut dungeon_state, digit)?;
+                    }
+                } else {
+                    // Add a message for unrecognized commands
+                    self.add_dungeon_message(&mut dungeon_state, format!("Unknown command: '{}'. Press H for help.", c));
+                }
             }
             _ => {
                 // Ignore all other keys (function keys, special keys, etc.)
@@ -2641,6 +2974,11 @@ impl Game {
                 dungeon_state.player_pos = crate::world::LocalCoord::new(new_x, new_y);
                 dungeon_state.turn_count += 1;
                 
+                // Advance corpse decay every 5 turns
+                if dungeon_state.turn_count % 5 == 0 {
+                    self.advance_corpse_decay(dungeon_state);
+                }
+                
                 // Update visibility around player
                 self.update_visibility(dungeon_state);
                 
@@ -3114,7 +3452,7 @@ impl Game {
         // TODO: Implement action selection UI
         // For now, just auto-loot if possible
         if corpse.interactions.contains(&crate::world::CorpseInteraction::Loot) && !corpse.loot_generated {
-            self.auto_loot_corpse(dungeon_state, corpse)?;
+            self.auto_loot_corpse(dungeon_state, corpse.position)?;
         }
         
         Ok(())
@@ -3145,42 +3483,68 @@ impl Game {
         Ok(())
     }
     
-    fn auto_loot_corpse(&mut self, dungeon_state: &mut crate::ui::DungeonExplorationState, corpse: &crate::world::DungeonCorpse) -> anyhow::Result<()> {
-        let loot_items = corpse.generate_loot();
-        
-        if loot_items.is_empty() {
-            self.add_dungeon_message(dungeon_state, "You find nothing of value on the corpse.".to_string());
-        } else {
-            self.add_dungeon_message(dungeon_state, "You loot the corpse and find:".to_string());
-            let mut total_gold = 0u32;
-            
-            for item in &loot_items {
-                match item.item_type {
-                    crate::world::LootItemType::Gold => {
-                        total_gold += item.quantity * item.value;
+    fn auto_loot_corpse(&mut self, dungeon_state: &mut crate::ui::DungeonExplorationState, corpse_position: crate::world::LocalCoord) -> anyhow::Result<()> {
+        // Find and mutate the corpse at the given position
+        if let Some(floor) = dungeon_state.dungeon.get_current_floor_mut() {
+            if let Some(corpse) = floor.corpses.iter_mut().find(|c| c.position == corpse_position) {
+                // Check if already looted
+                if corpse.loot_generated {
+                    self.add_dungeon_message(dungeon_state, "This corpse has already been looted.".to_string());
+                    return Ok(());
+                }
+                
+                let loot_items = corpse.generate_loot();
+                
+                if loot_items.is_empty() {
+                    self.add_dungeon_message(dungeon_state, "You find nothing of value on the corpse.".to_string());
+                } else {
+                    self.add_dungeon_message(dungeon_state, "You loot the corpse and find:".to_string());
+                    let mut total_gold = 0u32;
+                    
+                    for item in &loot_items {
+                        match item.item_type {
+                            crate::world::LootItemType::Gold => {
+                                total_gold += item.quantity * item.value;
+                            }
+                            _ => {
+                                let item_desc = if item.quantity > 1 {
+                                    format!("  {} x{}", item.name, item.quantity)
+                                } else {
+                                    format!("  {}", item.name)
+                                };
+                                self.add_dungeon_message(dungeon_state, item_desc);
+                                
+                                // Add to character inventory
+                                if let Some(character) = &mut self.current_character {
+                                    // Convert loot to inventory item
+                                    let inventory_item = crate::forge::InventoryItem {
+                                        name: item.name.clone(),
+                                        item_type: crate::forge::ItemType::Misc(crate::forge::MiscItem {
+                                            misc_type: crate::forge::MiscType::Trade,
+                                            special_properties: vec!["Dungeon loot".to_string()],
+                                        }),
+                                        weight: 0.5,
+                                        stack_size: 1,
+                                        quantity: 1,
+                                        value: 5,
+                                        description: "Loot found in dungeon".to_string(),
+                                    };
+                                    character.inventory.add_item(inventory_item).ok();
+                                }
+                            }
+                        }
                     }
-                    _ => {
-                        let item_desc = if item.quantity > 1 {
-                            format!("  {} x{}", item.name, item.quantity)
-                        } else {
-                            format!("  {}", item.name)
-                        };
-                        self.add_dungeon_message(dungeon_state, item_desc);
-                        
-                        // Add to character inventory
+                    
+                    if total_gold > 0 {
+                        self.add_dungeon_message(dungeon_state, format!("  {} gold coins", total_gold));
+                        // Add gold to character
                         if let Some(character) = &mut self.current_character {
-                            character.inventory.push(item.name.clone());
+                            character.gold += total_gold;
                         }
                     }
                 }
-            }
-            
-            if total_gold > 0 {
-                self.add_dungeon_message(dungeon_state, format!("  {} gold coins", total_gold));
-                // Add gold to character
-                if let Some(character) = &mut self.current_character {
-                    character.gold += total_gold;
-                }
+            } else {
+                self.add_dungeon_message(dungeon_state, "No corpse found at this location.".to_string());
             }
         }
         
@@ -3199,9 +3563,19 @@ impl Game {
                 _ => {
                     // Add to character inventory
                     if let Some(character) = &mut self.current_character {
-                        for _ in 0..item.quantity {
-                            character.inventory.push(item.name.clone());
-                        }
+                        let inventory_item = crate::forge::InventoryItem {
+                            name: item.name.clone(),
+                            item_type: crate::forge::ItemType::Misc(crate::forge::MiscItem {
+                                misc_type: crate::forge::MiscType::Trade,
+                                special_properties: vec!["Loot pile".to_string()],
+                            }),
+                            weight: 0.5,
+                            stack_size: 99,
+                            quantity: item.quantity,
+                            value: item.value,
+                            description: "Items found in a loot pile".to_string(),
+                        };
+                        character.inventory.add_item(inventory_item).ok();
                     }
                 }
             }
@@ -3216,6 +3590,166 @@ impl Game {
         }
         
         // TODO: Remove the loot pile from the floor after taking items
+        
+        Ok(())
+    }
+
+    fn advance_corpse_decay(&mut self, dungeon_state: &mut crate::ui::DungeonExplorationState) {
+        if let Some(floor) = dungeon_state.dungeon.get_current_floor_mut() {
+            let mut decay_messages = Vec::new();
+            let mut corpses_to_remove = Vec::new();
+            
+            for (i, corpse) in floor.corpses.iter_mut().enumerate() {
+                let old_decay = corpse.decay_level;
+                corpse.advance_decay();
+                
+                // Check for decay level changes that should be reported
+                match (old_decay, corpse.decay_level) {
+                    (0..=2, 3..=5) => {
+                        decay_messages.push(format!("The corpse of {} is starting to decay.", corpse.name));
+                    }
+                    (3..=5, 6..=9) => {
+                        decay_messages.push(format!("The remains of {} have turned skeletal.", corpse.name));
+                    }
+                    (6..=9, 10) => {
+                        decay_messages.push(format!("The bones of {} crumble to dust.", corpse.name));
+                        corpses_to_remove.push(i);
+                    }
+                    _ => {}
+                }
+            }
+            
+            // Remove completely decayed corpses (in reverse order to maintain indices)
+            for &index in corpses_to_remove.iter().rev() {
+                floor.corpses.remove(index);
+            }
+            
+            // Show decay messages to player
+            for message in decay_messages {
+                self.add_dungeon_message(dungeon_state, message);
+            }
+        }
+    }
+
+    fn handle_corpse_number_key(&mut self, dungeon_state: &mut crate::ui::DungeonExplorationState, action_number: usize) -> anyhow::Result<()> {
+        let player_pos = dungeon_state.player_pos;
+        
+        // Check if player is standing on a corpse
+        if let Some(floor) = dungeon_state.dungeon.get_current_floor() {
+            if let Some(corpse) = floor.corpses.iter().find(|c| c.position == player_pos) {
+                // Check if the action number is valid
+                if action_number > 0 && action_number <= corpse.interactions.len() {
+                    let action = &corpse.interactions[action_number - 1];
+                    let corpse_name = corpse.name.clone();
+                    let corpse_position = corpse.position;
+                    
+                    // Drop the immutable borrow before performing the action
+                    let _ = floor;
+                    
+                    self.perform_corpse_action(dungeon_state, action.clone(), &corpse_name, corpse_position)?;
+                } else {
+                    self.add_dungeon_message(dungeon_state, 
+                        format!("Invalid action number. Available actions: 1-{}", corpse.interactions.len()));
+                }
+            } else {
+                self.add_dungeon_message(dungeon_state, "You are not standing on a corpse.".to_string());
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn perform_corpse_action(&mut self, dungeon_state: &mut crate::ui::DungeonExplorationState, action: crate::world::CorpseInteraction, corpse_name: &str, corpse_position: crate::world::LocalCoord) -> anyhow::Result<()> {
+        match action {
+            crate::world::CorpseInteraction::Loot => {
+                self.auto_loot_corpse(dungeon_state, corpse_position)?;
+            }
+            crate::world::CorpseInteraction::Examine => {
+                if let Some(floor) = dungeon_state.dungeon.get_current_floor() {
+                    if let Some(corpse) = floor.corpses.iter().find(|c| c.position == corpse_position) {
+                        let decay_description = corpse.get_decay_description();
+                        let decay_level = corpse.decay_level;
+                        let loot_generated = corpse.loot_generated;
+                        
+                        self.add_dungeon_message(dungeon_state, decay_description);
+                        self.add_dungeon_message(dungeon_state, 
+                            format!("Decay level: {}/10", decay_level));
+                        
+                        if loot_generated {
+                            self.add_dungeon_message(dungeon_state, "This corpse has already been looted.".to_string());
+                        }
+                    }
+                }
+            }
+            crate::world::CorpseInteraction::Skin => {
+                self.add_dungeon_message(dungeon_state, format!("You carefully skin the {}, obtaining hide and meat.", corpse_name));
+                if let Some(character) = &mut self.current_character {
+                    let hide_item = crate::forge::InventoryItem {
+                        name: "Animal Hide".to_string(),
+                        item_type: crate::forge::ItemType::Material(crate::forge::MaterialItem {
+                            material_type: crate::forge::MaterialType::Leather,
+                            quality: crate::forge::Quality::Common,
+                        }),
+                        weight: 2.0,
+                        stack_size: 10,
+                        quantity: 1,
+                        value: 5,
+                        description: "Raw hide from an animal. Can be used for crafting.".to_string(),
+                    };
+                    let meat_item = crate::forge::InventoryItem {
+                        name: "Raw Meat".to_string(),
+                        item_type: crate::forge::ItemType::Consumable(crate::forge::ConsumableItem {
+                            consumable_type: crate::forge::ConsumableType::Food,
+                            effect: "Restores hunger when cooked".to_string(),
+                            duration: None,
+                        }),
+                        weight: 1.0,
+                        stack_size: 20,
+                        quantity: 1,
+                        value: 1,
+                        description: "Fresh meat from an animal. Needs cooking before eating.".to_string(),
+                    };
+                    character.inventory.add_item(hide_item).ok();
+                    character.inventory.add_item(meat_item).ok();
+                }
+            }
+            crate::world::CorpseInteraction::Harvest => {
+                self.add_dungeon_message(dungeon_state, format!("You harvest magical components from the {}.", corpse_name));
+                if let Some(character) = &mut self.current_character {
+                    let component_item = crate::forge::InventoryItem {
+                        name: "Spell Component".to_string(),
+                        item_type: crate::forge::ItemType::Consumable(crate::forge::ConsumableItem {
+                            consumable_type: crate::forge::ConsumableType::Reagent,
+                            effect: "Used in spell casting".to_string(),
+                            duration: None,
+                        }),
+                        weight: 0.1,
+                        stack_size: 50,
+                        quantity: 1,
+                        value: 10,
+                        description: "A magical component harvested from a creature.".to_string(),
+                    };
+                    character.inventory.add_item(component_item).ok();
+                }
+            }
+            crate::world::CorpseInteraction::RaiseSkeleton => {
+                self.add_dungeon_message(dungeon_state, format!("You attempt to raise the {} as a skeleton...", corpse_name));
+                self.add_dungeon_message(dungeon_state, "The necromantic energies swirl, but nothing happens. (Spell not yet implemented)".to_string());
+            }
+            crate::world::CorpseInteraction::RaiseZombie => {
+                self.add_dungeon_message(dungeon_state, format!("You attempt to raise the {} as a zombie...", corpse_name));
+                self.add_dungeon_message(dungeon_state, "The necromantic energies swirl, but nothing happens. (Spell not yet implemented)".to_string());
+            }
+            crate::world::CorpseInteraction::Burn => {
+                self.add_dungeon_message(dungeon_state, format!("You set fire to the corpse of {}.", corpse_name));
+                self.add_dungeon_message(dungeon_state, "The corpse burns away, leaving only ash.".to_string());
+                
+                // Remove the corpse from the floor
+                if let Some(floor) = dungeon_state.dungeon.get_current_floor_mut() {
+                    floor.corpses.retain(|c| c.position != corpse_position);
+                }
+            }
+        }
         
         Ok(())
     }
@@ -3839,5 +4373,371 @@ impl Game {
             ranged: false,
             range: None,
         }
+    }
+
+    fn handle_inventory_input(&mut self, key: KeyEvent, mut inventory_state: crate::ui::InventoryState) -> anyhow::Result<()> {
+        if let Some(character) = &mut self.current_character {
+            // Ensure sorted indices are up to date
+            inventory_state.sorted_indices = inventory_state.compute_sorted_indices(&character.inventory.items);
+            
+            // Helper to get original index from display index
+            let get_original_index = |display_index: usize| -> Option<usize> {
+                inventory_state.sorted_indices.get(display_index).copied()
+            };
+            
+            match key.code {
+                KeyCode::Esc => {
+                    self.state = UIState::CharacterMenu;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if inventory_state.selected_index > 0 {
+                        inventory_state.selected_index -= 1;
+                    }
+                    self.state = UIState::InventoryManagement(inventory_state);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let max_display_index = inventory_state.sorted_indices.len().saturating_sub(1);
+                    if inventory_state.selected_index < max_display_index {
+                        inventory_state.selected_index += 1;
+                    }
+                    self.state = UIState::InventoryManagement(inventory_state);
+                }
+                KeyCode::Enter => {
+                    // Use/Equip item - get original index from display index
+                    if let Some(original_index) = get_original_index(inventory_state.selected_index) {
+                        if let Some(item) = character.inventory.items.get(original_index) {
+                        match &item.item_type {
+                            crate::forge::ItemType::Weapon(weapon) => {
+                                // Equip weapon
+                                let old_weapon = character.equipment.weapon.take();
+                                character.equipment.weapon = Some(weapon.clone());
+                                
+                                // Add old weapon back to inventory if there was one
+                                if let Some(old) = old_weapon {
+                                    let name = old.name.clone();
+                                    let inventory_item = crate::forge::InventoryItem {
+                                        item_type: crate::forge::ItemType::Weapon(old),
+                                        name: name.clone(),
+                                        weight: 3.0, // Default weapon weight
+                                        stack_size: 1,
+                                        quantity: 1,
+                                        value: 25,
+                                        description: format!("A {}", name.to_lowercase()),
+                                    };
+                                    character.inventory.add_item(inventory_item);
+                                }
+                                
+                                // Remove equipped item from inventory using original index
+                                character.inventory.items.remove(original_index);
+                                // Adjust selected index if necessary (display index remains, but total count decreases)
+                                let new_max = character.inventory.items.len().saturating_sub(1);
+                                if inventory_state.selected_index > new_max && new_max > 0 {
+                                    inventory_state.selected_index = new_max;
+                                } else if character.inventory.items.is_empty() {
+                                    inventory_state.selected_index = 0;
+                                }
+                            }
+                            crate::forge::ItemType::Armor(armor) => {
+                                // Determine if this is shield or armor
+                                if armor.name.contains("Shield") {
+                                    let old_shield = character.equipment.shield.take();
+                                    character.equipment.shield = Some(armor.clone());
+                                    
+                                    if let Some(old) = old_shield {
+                                        let name = old.name.clone();
+                                        let inventory_item = crate::forge::InventoryItem {
+                                            item_type: crate::forge::ItemType::Armor(old),
+                                            name: name.clone(),
+                                            weight: 4.0,
+                                            stack_size: 1,
+                                            quantity: 1,
+                                            value: 30,
+                                            description: format!("A {}", name.to_lowercase()),
+                                        };
+                                        character.inventory.add_item(inventory_item);
+                                    }
+                                } else {
+                                    let old_armor = character.equipment.armor.take();
+                                    character.equipment.armor = Some(armor.clone());
+                                    
+                                    if let Some(old) = old_armor {
+                                        let name = old.name.clone();
+                                        let inventory_item = crate::forge::InventoryItem {
+                                            item_type: crate::forge::ItemType::Armor(old),
+                                            name: name.clone(),
+                                            weight: 8.0,
+                                            stack_size: 1,
+                                            quantity: 1,
+                                            value: 40,
+                                            description: format!("A {}", name.to_lowercase()),
+                                        };
+                                        character.inventory.add_item(inventory_item);
+                                    }
+                                }
+                                
+                                character.inventory.items.remove(original_index);
+                                let new_max = character.inventory.items.len().saturating_sub(1);
+                                if inventory_state.selected_index > new_max && new_max > 0 {
+                                    inventory_state.selected_index = new_max;
+                                } else if character.inventory.items.is_empty() {
+                                    inventory_state.selected_index = 0;
+                                }
+                            }
+                            crate::forge::ItemType::Accessory(accessory) => {
+                                // Try to equip in first available accessory slot
+                                if character.equipment.accessory1.is_none() {
+                                    character.equipment.accessory1 = Some(accessory.clone());
+                                } else if character.equipment.accessory2.is_none() {
+                                    character.equipment.accessory2 = Some(accessory.clone());
+                                } else {
+                                    // Both slots full, replace first one
+                                    let old_accessory = character.equipment.accessory1.take();
+                                    character.equipment.accessory1 = Some(accessory.clone());
+                                    
+                                    if let Some(old) = old_accessory {
+                                        let name = old.name.clone();
+                                        let inventory_item = crate::forge::InventoryItem {
+                                            item_type: crate::forge::ItemType::Accessory(old),
+                                            name: name.clone(),
+                                            weight: 0.5,
+                                            stack_size: 1,
+                                            quantity: 1,
+                                            value: 50,
+                                            description: format!("A {}", name.to_lowercase()),
+                                        };
+                                        character.inventory.add_item(inventory_item);
+                                    }
+                                }
+                                
+                                character.inventory.items.remove(original_index);
+                                let new_max = character.inventory.items.len().saturating_sub(1);
+                                if inventory_state.selected_index > new_max && new_max > 0 {
+                                    inventory_state.selected_index = new_max;
+                                } else if character.inventory.items.is_empty() {
+                                    inventory_state.selected_index = 0;
+                                }
+                            }
+                            crate::forge::ItemType::Consumable(_) => {
+                                // Use consumable (basic implementation)
+                                // For now, just remove one from inventory
+                                if let Some(item) = character.inventory.items.get_mut(original_index) {
+                                    if item.quantity > 1 {
+                                        item.quantity -= 1;
+                                    } else {
+                                        character.inventory.items.remove(original_index);
+                                        let new_max = character.inventory.items.len().saturating_sub(1);
+                                        if inventory_state.selected_index > new_max && new_max > 0 {
+                                            inventory_state.selected_index = new_max;
+                                        } else if character.inventory.items.is_empty() {
+                                            inventory_state.selected_index = 0;
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {
+                                // Other item types - no action for now
+                            }
+                        }
+                        
+                        // Equipment change complete
+                        }
+                    }
+                    self.state = UIState::InventoryManagement(inventory_state);
+                }
+                KeyCode::Char('d') => {
+                    // Drop item - get original index from display index
+                    if !character.inventory.items.is_empty() && inventory_state.selected_index < inventory_state.sorted_indices.len() {
+                        if let Some(original_index) = get_original_index(inventory_state.selected_index) {
+                            character.inventory.items.remove(original_index);
+                            let new_max = character.inventory.items.len().saturating_sub(1);
+                            if inventory_state.selected_index > new_max && new_max > 0 {
+                                inventory_state.selected_index = new_max;
+                            } else if character.inventory.items.is_empty() {
+                                inventory_state.selected_index = 0;
+                            }
+                        }
+                    }
+                    self.state = UIState::InventoryManagement(inventory_state);
+                }
+                KeyCode::Tab => {
+                    // Cycle sort mode
+                    inventory_state.sort_mode = match inventory_state.sort_mode {
+                        crate::ui::InventorySortMode::Name => crate::ui::InventorySortMode::Type,
+                        crate::ui::InventorySortMode::Type => crate::ui::InventorySortMode::Weight,
+                        crate::ui::InventorySortMode::Weight => crate::ui::InventorySortMode::Value,
+                        crate::ui::InventorySortMode::Value => crate::ui::InventorySortMode::Quantity,
+                        crate::ui::InventorySortMode::Quantity => crate::ui::InventorySortMode::Name,
+                    };
+                    self.state = UIState::InventoryManagement(inventory_state);
+                }
+                _ => {
+                    self.state = UIState::InventoryManagement(inventory_state);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_equipment_input(&mut self, key: KeyEvent, mut equipment_state: crate::ui::EquipmentState) -> anyhow::Result<()> {
+        if let Some(character) = &mut self.current_character {
+            match key.code {
+                KeyCode::Esc => {
+                    self.state = UIState::CharacterMenu;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    // Navigate equipment slots
+                    equipment_state.selected_slot = match equipment_state.selected_slot {
+                        crate::ui::EquipmentSlot::Weapon => crate::ui::EquipmentSlot::Accessory2,
+                        crate::ui::EquipmentSlot::Armor => crate::ui::EquipmentSlot::Weapon,
+                        crate::ui::EquipmentSlot::Shield => crate::ui::EquipmentSlot::Armor,
+                        crate::ui::EquipmentSlot::Accessory1 => crate::ui::EquipmentSlot::Shield,
+                        crate::ui::EquipmentSlot::Accessory2 => crate::ui::EquipmentSlot::Accessory1,
+                    };
+                    let compatible_items = Self::get_compatible_items_static(character, &equipment_state.selected_slot);
+                    equipment_state.available_items = compatible_items;
+                    equipment_state.selected_item_index = 0;
+                    self.state = UIState::EquipmentManagement(equipment_state);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    // Navigate equipment slots
+                    equipment_state.selected_slot = match equipment_state.selected_slot {
+                        crate::ui::EquipmentSlot::Weapon => crate::ui::EquipmentSlot::Armor,
+                        crate::ui::EquipmentSlot::Armor => crate::ui::EquipmentSlot::Shield,
+                        crate::ui::EquipmentSlot::Shield => crate::ui::EquipmentSlot::Accessory1,
+                        crate::ui::EquipmentSlot::Accessory1 => crate::ui::EquipmentSlot::Accessory2,
+                        crate::ui::EquipmentSlot::Accessory2 => crate::ui::EquipmentSlot::Weapon,
+                    };
+                    let compatible_items = Self::get_compatible_items_static(character, &equipment_state.selected_slot);
+                    equipment_state.available_items = compatible_items;
+                    equipment_state.selected_item_index = 0;
+                    self.state = UIState::EquipmentManagement(equipment_state);
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    // Navigate available items
+                    if equipment_state.selected_item_index > 0 {
+                        equipment_state.selected_item_index -= 1;
+                    }
+                    self.state = UIState::EquipmentManagement(equipment_state);
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    // Navigate available items
+                    if equipment_state.selected_item_index < equipment_state.available_items.len().saturating_sub(1) {
+                        equipment_state.selected_item_index += 1;
+                    }
+                    self.state = UIState::EquipmentManagement(equipment_state);
+                }
+                KeyCode::Enter => {
+                    // Equip selected item
+                    if let Some(item) = equipment_state.available_items.get(equipment_state.selected_item_index) {
+                        // Implementation similar to inventory equip logic
+                        // This is a simplified version - full implementation would handle slot-specific logic
+                    }
+                    self.state = UIState::EquipmentManagement(equipment_state);
+                }
+                KeyCode::Char('u') => {
+                    // Unequip item from selected slot
+                    match equipment_state.selected_slot {
+                        crate::ui::EquipmentSlot::Weapon => {
+                            if let Some(weapon) = character.equipment.weapon.take() {
+                                let name = weapon.name.clone();
+                                let inventory_item = crate::forge::InventoryItem {
+                                    item_type: crate::forge::ItemType::Weapon(weapon),
+                                    name: name.clone(),
+                                    weight: 3.0,
+                                    stack_size: 1,
+                                    quantity: 1,
+                                    value: 25,
+                                    description: format!("A {}", name.to_lowercase()),
+                                };
+                                character.inventory.add_item(inventory_item);
+                            }
+                        }
+                        crate::ui::EquipmentSlot::Armor => {
+                            if let Some(armor) = character.equipment.armor.take() {
+                                let name = armor.name.clone();
+                                let inventory_item = crate::forge::InventoryItem {
+                                    item_type: crate::forge::ItemType::Armor(armor),
+                                    name: name.clone(),
+                                    weight: 8.0,
+                                    stack_size: 1,
+                                    quantity: 1,
+                                    value: 40,
+                                    description: format!("A {}", name.to_lowercase()),
+                                };
+                                character.inventory.add_item(inventory_item);
+                            }
+                        }
+                        crate::ui::EquipmentSlot::Shield => {
+                            if let Some(shield) = character.equipment.shield.take() {
+                                let name = shield.name.clone();
+                                let inventory_item = crate::forge::InventoryItem {
+                                    item_type: crate::forge::ItemType::Armor(shield),
+                                    name: name.clone(),
+                                    weight: 4.0,
+                                    stack_size: 1,
+                                    quantity: 1,
+                                    value: 30,
+                                    description: format!("A {}", name.to_lowercase()),
+                                };
+                                character.inventory.add_item(inventory_item);
+                            }
+                        }
+                        crate::ui::EquipmentSlot::Accessory1 => {
+                            if let Some(accessory) = character.equipment.accessory1.take() {
+                                let name = accessory.name.clone();
+                                let inventory_item = crate::forge::InventoryItem {
+                                    item_type: crate::forge::ItemType::Accessory(accessory),
+                                    name: name.clone(),
+                                    weight: 0.5,
+                                    stack_size: 1,
+                                    quantity: 1,
+                                    value: 50,
+                                    description: format!("A {}", name.to_lowercase()),
+                                };
+                                character.inventory.add_item(inventory_item);
+                            }
+                        }
+                        crate::ui::EquipmentSlot::Accessory2 => {
+                            if let Some(accessory) = character.equipment.accessory2.take() {
+                                let name = accessory.name.clone();
+                                let inventory_item = crate::forge::InventoryItem {
+                                    item_type: crate::forge::ItemType::Accessory(accessory),
+                                    name: name.clone(),
+                                    weight: 0.5,
+                                    stack_size: 1,
+                                    quantity: 1,
+                                    value: 50,
+                                    description: format!("A {}", name.to_lowercase()),
+                                };
+                                character.inventory.add_item(inventory_item);
+                            }
+                        }
+                    }
+                    
+                    // Equipment change complete
+                    
+                    self.state = UIState::EquipmentManagement(equipment_state);
+                }
+                _ => {
+                    self.state = UIState::EquipmentManagement(equipment_state);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn get_compatible_items_static(character: &crate::forge::ForgeCharacter, slot: &crate::ui::EquipmentSlot) -> Vec<crate::forge::InventoryItem> {
+        character.inventory.items.iter()
+            .filter(|item| {
+                match (slot, &item.item_type) {
+                    (crate::ui::EquipmentSlot::Weapon, crate::forge::ItemType::Weapon(_)) => true,
+                    (crate::ui::EquipmentSlot::Armor, crate::forge::ItemType::Armor(armor)) => !armor.name.contains("Shield"),
+                    (crate::ui::EquipmentSlot::Shield, crate::forge::ItemType::Armor(armor)) => armor.name.contains("Shield"),
+                    (crate::ui::EquipmentSlot::Accessory1 | crate::ui::EquipmentSlot::Accessory2, crate::forge::ItemType::Accessory(_)) => true,
+                    _ => false,
+                }
+            })
+            .cloned()
+            .collect()
     }
 }
