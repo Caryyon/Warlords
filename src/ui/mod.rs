@@ -1710,6 +1710,7 @@ impl GameUI {
                 Line::from(format!("Character: {}", character.name)),
                 Line::from(format!("Level: {} ({})", character.level, character.race.name)),
                 Line::from(format!("HP: {}/{}", character.combat_stats.hit_points.current, character.combat_stats.hit_points.max)),
+                Line::from(format!("Gold: {}", character.gold)),
                 Line::from(format!("Position: ({}, {})", dungeon_state.player_pos.x, dungeon_state.player_pos.y)),
                 Line::from(format!("Turn: {}", dungeon_state.turn_count)),
                 Line::from(""),
