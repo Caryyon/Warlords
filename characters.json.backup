@@ -1,0 +1,206 @@
+{
+  "characters": {
+    "Zocora": {
+      "character": {
+        "name": "Zocora",
+        "characteristics": {
+          "strength": 11.4,
+          "stamina": 11.9,
+          "intellect": 11.9,
+          "insight": 5.8,
+          "dexterity": 6.1,
+          "awareness": 11.4,
+          "speed": 4,
+          "power": 6,
+          "luck": 10
+        },
+        "combat_stats": {
+          "hit_points": {
+            "current": 11,
+            "max": 11
+          },
+          "attack_value": 11,
+          "defensive_value": 11,
+          "damage_bonus": 0
+        },
+        "race": {
+          "name": "Dunnar",
+          "description": "Pale, thin beings with undead appearance. Mind protection but photosensitive.",
+          "characteristic_modifiers": {
+            "strength": 0.0,
+            "stamina": 0.0,
+            "intellect": 0.0,
+            "insight": 0.0,
+            "dexterity": 0.0,
+            "awareness": 0.0,
+            "speed": 0,
+            "power": 0,
+            "luck": 0
+          },
+          "limits": {
+            "strength": 9.0,
+            "stamina": null,
+            "intellect": null,
+            "insight": null,
+            "dexterity": null,
+            "awareness": null
+          },
+          "starting_skills": [
+            [
+              "Mind Magic",
+              1
+            ]
+          ],
+          "special_abilities": [
+            "Mind Protection",
+            "Detect Magic by Touch",
+            "Photosensitive (1 dmg/hour in sun)"
+          ]
+        },
+        "level": 1,
+        "experience": 0,
+        "skills": {
+          "Mind Magic": 1
+        },
+        "skill_pips": {},
+        "magic": {
+          "spell_points": {
+            "current": 12,
+            "max": 12
+          },
+          "known_spells": {},
+          "school_skills": {},
+          "school_pips": {}
+        },
+        "inventory": [
+          "Farm clothes",
+          "Simple tools"
+        ],
+        "gold": 10,
+        "created_at": "2025-06-25T22:44:08.549158Z",
+        "last_played": "2025-06-26T03:18:22.052677Z",
+        "current_zone": {
+          "x": 4,
+          "y": 4
+        },
+        "current_position": {
+          "x": 32,
+          "y": 32
+        }
+      },
+      "password_hash": "45bc6b2f65035755218ebbc5941a172404c1044ee2a8230f33b9823128bab476",
+      "salt": "daa6ddef01f771ad"
+    },
+    "Necromancer": {
+      "character": {
+        "name": "Necromancer",
+        "characteristics": {
+          "strength": 8.5,
+          "stamina": 11.6,
+          "intellect": 12.0,
+          "insight": 8.0,
+          "dexterity": 10.0,
+          "awareness": 8.0,
+          "speed": 4,
+          "power": 14,
+          "luck": 13
+        },
+        "combat_stats": {
+          "hit_points": {
+            "current": 10,
+            "max": 10
+          },
+          "attack_value": 14,
+          "defensive_value": 14,
+          "damage_bonus": 0
+        },
+        "race": {
+          "name": "Dunnar",
+          "description": "Pale, thin beings with undead appearance. Mind protection but photosensitive.",
+          "characteristic_modifiers": {
+            "strength": 0.0,
+            "stamina": 0.0,
+            "intellect": 0.0,
+            "insight": 0.0,
+            "dexterity": 0.0,
+            "awareness": 0.0,
+            "speed": 0,
+            "power": 0,
+            "luck": 0
+          },
+          "limits": {
+            "strength": 9.0,
+            "stamina": null,
+            "intellect": null,
+            "insight": null,
+            "dexterity": null,
+            "awareness": null
+          },
+          "starting_skills": [
+            [
+              "Mind Magic",
+              1
+            ]
+          ],
+          "special_abilities": [
+            "Mind Protection",
+            "Detect Magic by Touch",
+            "Photosensitive (1 dmg/hour in sun)"
+          ]
+        },
+        "level": 1,
+        "experience": 0,
+        "skills": {
+          "Crafting": 1,
+          "Lore": 1,
+          "Mind Magic": 1,
+          "Survival": 1,
+          "Perception": 1
+        },
+        "skill_pips": {},
+        "magic": {
+          "spell_points": {
+            "current": 28,
+            "max": 28
+          },
+          "known_spells": {
+            "Necromancer": [
+              "Drain Life",
+              "Weaken"
+            ]
+          },
+          "school_skills": {
+            "Necromancer": 1
+          },
+          "school_pips": {}
+        },
+        "inventory": [
+          "Farm clothes",
+          "Simple tools",
+          "Backpack",
+          "Bedroll",
+          "Dagger",
+          "Healer's Kit",
+          "Spell Components",
+          "Staff",
+          "Torch (5)",
+          "Waterskin",
+          "Rations (1 week)"
+        ],
+        "gold": 10,
+        "created_at": "2025-06-26T13:01:51.413354Z",
+        "last_played": "2025-06-26T13:19:29.253510Z",
+        "current_zone": {
+          "x": 4,
+          "y": 4
+        },
+        "current_position": {
+          "x": 32,
+          "y": 32
+        }
+      },
+      "password_hash": "318579ff7d8fb584004ddeedd004dfed1b2d1982808fba808103241ec5b3aa74",
+      "salt": "8108e3191a7446d6"
+    }
+  }
+}
