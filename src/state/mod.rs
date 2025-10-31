@@ -7,11 +7,13 @@ pub mod character;
 pub mod world;
 pub mod dungeon;
 pub mod combat;
+pub mod game_state;
 
 pub use character::CharacterState;
 pub use world::WorldState;
 pub use dungeon::DungeonState;
 pub use combat::CombatState;
+pub use game_state::GameStateManager;
 
 /// Core trait for all persistable game state
 /// This abstraction allows us to swap persistence backends (file, SpacetimeDB, etc.)
