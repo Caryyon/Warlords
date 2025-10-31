@@ -5353,12 +5353,12 @@ impl Game {
                     }
                     crate::ui::CombatPanel::Combat => {
                         match key.code {
-                            // Panel navigation (arrow keys, JK, WS)
-                            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('s') => {
+                            // Panel navigation (arrow keys, JK - note: W is used as combat action hotkey)
+                            KeyCode::Down | KeyCode::Char('j') => {
                                 tactical_combat_state.panel_selections.combat_index =
                                     (tactical_combat_state.panel_selections.combat_index + 1) % 5;
                             }
-                            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => {
+                            KeyCode::Up | KeyCode::Char('k') => {
                                 if tactical_combat_state.panel_selections.combat_index == 0 {
                                     tactical_combat_state.panel_selections.combat_index = 4;
                                 } else {

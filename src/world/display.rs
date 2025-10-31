@@ -19,7 +19,7 @@ impl WorldRenderer {
         }
     }
     
-    pub fn render_zone_view(&self, zone: &WorldZone, player_pos: LocalCoord, view_distance: i32) -> Vec<Line> {
+    pub fn render_zone_view(&self, zone: &WorldZone, player_pos: LocalCoord, view_distance: i32) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
         
         let start_x = (player_pos.x - view_distance).max(0);
@@ -46,7 +46,7 @@ impl WorldRenderer {
         lines
     }
     
-    pub fn render_minimap(&self, zone: &WorldZone, player_pos: LocalCoord) -> Vec<Line> {
+    pub fn render_minimap(&self, zone: &WorldZone, player_pos: LocalCoord) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
         let scale = 8i32; // Show every 8th tile
         
@@ -155,7 +155,7 @@ impl WorldRenderer {
         }
     }
     
-    pub fn render_location_info(&self, zone: &WorldZone, player_pos: LocalCoord) -> Vec<Line> {
+    pub fn render_location_info(&self, zone: &WorldZone, player_pos: LocalCoord) -> Vec<Line<'_>> {
         let mut lines = vec![
             Line::from(Span::styled("Location Info", Style::default().fg(Color::Yellow))),
             Line::from(""),
@@ -202,7 +202,7 @@ impl WorldRenderer {
         lines
     }
     
-    pub fn render_zone_overview(&self, zone: &WorldZone) -> Vec<Line> {
+    pub fn render_zone_overview(&self, zone: &WorldZone) -> Vec<Line<'_>> {
         let mut lines = vec![
             Line::from(Span::styled("Zone Overview", Style::default().fg(Color::Yellow))),
             Line::from(""),
@@ -236,7 +236,7 @@ impl WorldRenderer {
         lines
     }
     
-    pub fn render_world_map(&self, zones: &[(ZoneCoord, Option<&WorldZone>)], player_zone: ZoneCoord) -> Vec<Line> {
+    pub fn render_world_map(&self, zones: &[(ZoneCoord, Option<&WorldZone>)], player_zone: ZoneCoord) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
         
         // Find bounds

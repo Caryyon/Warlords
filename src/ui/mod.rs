@@ -4310,7 +4310,8 @@ impl GameUI {
 
         f.render_widget(battlefield_widget, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_current_participant_info(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let info_text = if let Some(participant) = tactical_combat_state.get_current_participant() {
             let (phase_text, phase_color, instructions) = match tactical_combat_state.combat_phase {
@@ -4607,7 +4608,8 @@ impl GameUI {
         
         f.render_widget(skills_panel, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_target_info(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let mut lines = vec![];
         
@@ -4655,7 +4657,8 @@ impl GameUI {
         
         f.render_widget(target_panel, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_navigation_hints(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let active_panel_name = match tactical_combat_state.active_panel {
             CombatPanel::Battlefield => "Battlefield",
@@ -4680,7 +4683,8 @@ impl GameUI {
         
         f.render_widget(hints, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_quick_battlefield_status(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let current_participant = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index);
         let status_text = if let Some(participant) = current_participant {
@@ -4702,7 +4706,8 @@ impl GameUI {
         
         f.render_widget(status, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_equipment_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let mut lines = vec![
             Line::from(Span::styled("Equipment", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
@@ -4780,7 +4785,8 @@ impl GameUI {
         
         f.render_widget(inventory, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_effects_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let mut lines = vec![
             Line::from(Span::styled("Active Effects", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
@@ -5182,7 +5188,8 @@ impl GameUI {
         
         f.render_widget(panel, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_navigation_controls(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let nav_mode_text = match tactical_combat_state.navigation_mode {
             NavigationMode::PanelNavigation => "Panel Navigation (Shift+HJKL)",
@@ -5233,6 +5240,7 @@ impl GameUI {
         f.render_widget(controls, area);
     }
 
+    #[allow(dead_code)]
     fn draw_action_menu(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let action_descriptions = [
             ("Move Only", "Move without attacking"),
@@ -5300,7 +5308,8 @@ impl GameUI {
         
         f.render_widget(menu_widget, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_tactical_controls(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         // Compact controls for horizontal layout
         let control_text = match tactical_combat_state.combat_phase {
@@ -5433,7 +5442,8 @@ impl GameUI {
         
         f.render_widget(status_widget, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_spell_menu(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let spell_items: Vec<ListItem> = tactical_combat_state.available_spells
             .iter()
@@ -5464,7 +5474,8 @@ impl GameUI {
         
         f.render_widget(spell_list, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_compact_tactical_battlefield(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let battlefield = &tactical_combat_state.battlefield;
         let cursor_pos = &tactical_combat_state.cursor_position;
@@ -5613,7 +5624,8 @@ impl GameUI {
         
         f.render_widget(battlefield_widget, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_detailed_participant_info(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let info_text = if let Some(participant) = tactical_combat_state.get_current_participant() {
             let (phase_text, phase_color) = match tactical_combat_state.combat_phase {
@@ -5660,7 +5672,8 @@ impl GameUI {
         
         f.render_widget(info_widget, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_actions_spells_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         if tactical_combat_state.action_menu_open {
             // Show action menu when open
@@ -5691,7 +5704,8 @@ impl GameUI {
             f.render_widget(panel, area);
         }
     }
-    
+
+    #[allow(dead_code)]
     fn draw_combat_statistics(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let players_alive = tactical_combat_state.participants.iter()
             .filter(|p| p.base_participant.is_player && p.base_participant.is_alive())
@@ -5726,7 +5740,8 @@ impl GameUI {
         
         f.render_widget(stats_widget, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_integrated_tactical_combat(f: &mut Frame, area: ratatui::layout::Rect, dungeon_state: &DungeonExplorationState, tactical_combat: &TacticalCombatState, _current_character: Option<&crate::forge::ForgeCharacter>) {
         // Four-column layout: smaller battlefield, action panels, info panels, extra panel
         let main_chunks = Layout::default()
@@ -5836,7 +5851,8 @@ impl GameUI {
         }
         // If no modals are active, the main UI elements above are visible
     }
-    
+
+    #[allow(dead_code)]
     fn draw_forge_action_declaration_overlay(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState) {
         // Create a centered overlay for action selection
         let popup_area = Self::centered_rect(60, 70, area);
@@ -5934,7 +5950,8 @@ impl GameUI {
                 .title("Controls"));
         f.render_widget(instructions_widget, chunks[2]);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_forge_spell_selection_overlay(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState) {
         // Create a larger, full-screen overlay for enhanced spell selection
         let popup_area = Self::centered_rect(95, 90, area);
@@ -5960,7 +5977,8 @@ impl GameUI {
             Self::draw_spell_list_interface(f, inner_area, tactical_combat);
         }
     }
-    
+
+    #[allow(dead_code)]
     fn draw_spell_list_interface(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState) {
         // Split into three columns: spell list, spell details, current character info
         let main_chunks = Layout::default()
@@ -6027,7 +6045,8 @@ impl GameUI {
         // Right: Character info and instructions
         Self::draw_spell_character_info(f, main_chunks[2], tactical_combat);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_spell_enhancement_panel(f: &mut Frame, area: ratatui::layout::Rect, spell: &crate::forge::magic::Spell) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -6130,7 +6149,8 @@ impl GameUI {
                 .style(Style::default().bg(Color::Black)));
         f.render_widget(instructions_widget, chunks[3]);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_spell_character_info(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState) {
         if let Some(participant) = tactical_combat.get_current_participant() {
             let character_info = vec![
@@ -6173,7 +6193,8 @@ impl GameUI {
             f.render_widget(character_widget, area);
         }
     }
-    
+
+    #[allow(dead_code)]
     fn draw_spell_enhancement_interface(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState) {
         if let Some((_spell_name, spell)) = tactical_combat.available_spells.get(tactical_combat.selected_spell_index) {
             let chunks = Layout::default()
@@ -6195,7 +6216,8 @@ impl GameUI {
             Self::draw_enhancement_costs(f, chunks[2], tactical_combat, spell);
         }
     }
-    
+
+    #[allow(dead_code)]
     fn draw_enhancement_selection(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState, spell: &crate::forge::magic::Spell) {
         let enhancement = &tactical_combat.current_enhancement;
         
@@ -6254,7 +6276,8 @@ impl GameUI {
                 .style(Style::default().bg(Color::Black)));
         f.render_widget(enhancement_list, area);
     }
-    
+
+    #[allow(dead_code)]
     fn get_enhancement_bonus_text(category: usize, school: &crate::forge::magic::MagicSchool) -> String {
         let bonuses = match school {
             crate::forge::magic::MagicSchool::Beast => (5, 10, 1, 1, 15),
@@ -6273,7 +6296,8 @@ impl GameUI {
             _ => "Unknown".to_string(),
         }
     }
-    
+
+    #[allow(dead_code)]
     fn draw_enhanced_spell_preview(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState, spell: &crate::forge::magic::Spell) {
         let enhancement = &tactical_combat.current_enhancement;
         
@@ -6341,7 +6365,8 @@ impl GameUI {
                 .border_style(Style::default().fg(Color::Blue)));
         f.render_widget(preview_widget, area);
     }
-    
+
+    #[allow(dead_code)]
     fn draw_enhancement_costs(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState, spell: &crate::forge::magic::Spell) {
         let enhancement = &tactical_combat.current_enhancement;
         
