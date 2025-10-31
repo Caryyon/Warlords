@@ -857,13 +857,13 @@ impl Game {
             }
             CreationStep::SkillSelection => {
                 match key.code {
-                    KeyCode::Up => {
+                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => {
                         if creation_state.current_selection_index > 0 {
                             creation_state.current_selection_index -= 1;
                         }
                         self.state = UIState::CharacterCreation(creation_state);
                     }
-                    KeyCode::Down => {
+                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('s') => {
                         if creation_state.current_selection_index < creation_state.available_skills_list.len().saturating_sub(1) {
                             creation_state.current_selection_index += 1;
                         }
@@ -902,13 +902,13 @@ impl Game {
             }
             CreationStep::SpellSelection => {
                 match key.code {
-                    KeyCode::Up => {
+                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => {
                         if creation_state.current_selection_index > 0 {
                             creation_state.current_selection_index -= 1;
                         }
                         self.state = UIState::CharacterCreation(creation_state);
                     }
-                    KeyCode::Down => {
+                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('s') => {
                         if creation_state.current_selection_index < creation_state.available_spells_list.len().saturating_sub(1) {
                             creation_state.current_selection_index += 1;
                         }
@@ -947,13 +947,13 @@ impl Game {
             }
             CreationStep::GearSelection => {
                 match key.code {
-                    KeyCode::Up => {
+                    KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => {
                         if creation_state.current_selection_index > 0 {
                             creation_state.current_selection_index -= 1;
                         }
                         self.state = UIState::CharacterCreation(creation_state);
                     }
-                    KeyCode::Down => {
+                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('s') => {
                         if creation_state.current_selection_index < creation_state.available_gear_list.len().saturating_sub(1) {
                             creation_state.current_selection_index += 1;
                         }
@@ -1352,7 +1352,7 @@ impl Game {
         }
 
         match key.code {
-            KeyCode::Up | KeyCode::Char('w') => {
+            KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') => {
                 let new_index = match selected_index {
                     Some(idx) => {
                         if idx > 0 { idx - 1 } else { character_list.len() - 1 }
@@ -1361,7 +1361,7 @@ impl Game {
                 };
                 self.state = UIState::CharacterList(character_list, Some(new_index));
             }
-            KeyCode::Down | KeyCode::Char('s') => {
+            KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') => {
                 let new_index = match selected_index {
                     Some(idx) => {
                         if idx < character_list.len() - 1 { idx + 1 } else { 0 }
