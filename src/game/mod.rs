@@ -332,97 +332,50 @@ impl Game {
         
         match &self.state {
             UIState::Welcome => {
-                // Any key proceeds to main menu
-                self.state = UIState::MainMenu;
+                // Any key proceeds to character list
+                let character_list = self.database.list_characters();
+                let selected_index = if character_list.is_empty() { None } else { Some(0) };
+                self.state = UIState::CharacterList(character_list, selected_index);
             }
             UIState::MainMenu => {
-                if self.current_character.is_some() {
-                    // Menu when character is logged in
-                    match key.code {
-                        KeyCode::Char('1') => {
-                            self.state = UIState::Playing;
-                        }
-                        KeyCode::Char('2') => {
-                            // Enter world exploration directly
-                            if self.current_character.is_some() {
-                                self.enter_world_exploration()?;
-                            }
-                        }
-                        KeyCode::Char('3') => {
-                            self.state = UIState::CharacterMenu;
-                        }
-                        KeyCode::Char('4') => {
-                            // Logout and return to main menu
-                            self.current_character = None;
-                            self.world_manager = None;
-                            self.state = UIState::MainMenu;
-                        }
-                        KeyCode::Char('5') | KeyCode::Char('q') => {
-                            return Ok(true); // Exit
-                        }
-                        KeyCode::Char('m') => {
-                            // Quick return to game
-                            self.state = UIState::Playing;
-                        }
-                        _ => {}
-                    }
-                } else {
-                    // Menu when no character is logged in
-                    match key.code {
-                        KeyCode::Char('1') => {
-                            self.state = UIState::CharacterLogin;
-                            self.input_buffer.clear();
-                        }
-                        KeyCode::Char('2') => {
-                            self.state = UIState::CharacterCreation(CharacterCreationState {
-                                step: CreationStep::Rolling,
-                                rolled_data: None,
-                                selected_race: None,
-                                character_name: None,
-                                selected_skills: Vec::new(),
-                                available_skill_points: 0,
-                                selected_spells: Vec::new(),
-                                available_spell_picks: 0,
-                                selected_gear: Vec::new(),
-                                current_selection_index: 0,
-                                available_skills_list: Vec::new(),
-                                available_spells_list: Vec::new(),
-                                available_gear_list: Vec::new(),
-                                starting_gold: 100, // Base starting gold per Forge rules
-                                spent_gold: 0,
-                            });
-                        }
-                        KeyCode::Char('3') => {
-                            let character_list = self.database.list_characters();
-                            let selected_index = if character_list.is_empty() { None } else { Some(0) };
-                            self.state = UIState::CharacterList(character_list, selected_index);
-                        }
-                        KeyCode::Char('4') | KeyCode::Char('q') => {
-                            return Ok(true); // Exit
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            UIState::CharacterLogin => {
+                // In-game menu (only accessible when a character is active)
                 match key.code {
-                    KeyCode::Enter => {
-                        if self.input_buffer == "back" {
-                            self.state = UIState::MainMenu;
-                            self.input_buffer.clear();
-                        } else {
-                            self.handle_login_attempt()?;
+                    KeyCode::Char('1') => {
+                        self.state = UIState::Playing;
+                    }
+                    KeyCode::Char('2') => {
+                        // Enter world exploration directly
+                        if self.current_character.is_some() {
+                            self.enter_world_exploration()?;
                         }
                     }
-                    KeyCode::Char(c) => {
-                        self.input_buffer.push(c);
+                    KeyCode::Char('3') => {
+                        self.state = UIState::CharacterMenu;
                     }
-                    KeyCode::Backspace => {
-                        self.input_buffer.pop();
+                    KeyCode::Char('4') => {
+                        // Logout and return to character list
+                        // Save character data before logging out
+                        if let Some(character) = &self.current_character {
+                            let _ = self.database.update_character(&character.name, character.clone());
+                            let _ = self.database.save(&self.db_path);
+                        }
+                        self.current_character = None;
+                        self.world_manager = None;
+                        let character_list = self.database.list_characters();
+                        let selected_index = if character_list.is_empty() { None } else { Some(0) };
+                        self.state = UIState::CharacterList(character_list, selected_index);
                     }
-                    KeyCode::Esc => {
-                        self.state = UIState::MainMenu;
-                        self.input_buffer.clear();
+                    KeyCode::Char('5') | KeyCode::Char('q') => {
+                        // Save character data before exiting
+                        if let Some(character) = &self.current_character {
+                            let _ = self.database.update_character(&character.name, character.clone());
+                            let _ = self.database.save(&self.db_path);
+                        }
+                        return Ok(true); // Exit
+                    }
+                    KeyCode::Char('m') => {
+                        // Quick return to game
+                        self.state = UIState::Playing;
                     }
                     _ => {}
                 }
@@ -628,10 +581,6 @@ impl Game {
     
     fn handle_button_click(&mut self, button_id: &str) -> anyhow::Result<()> {
         match button_id {
-            "login" => {
-                self.state = UIState::CharacterLogin;
-                self.input_buffer.clear();
-            }
             "create" => {
                 self.state = UIState::CharacterCreation(crate::ui::CharacterCreationState {
                     step: crate::ui::CreationStep::Rolling,
@@ -747,34 +696,6 @@ impl Game {
     
     fn handle_drag(&mut self, _area_id: &str, _start: (u16, u16), _end: (u16, u16)) -> anyhow::Result<()> {
         // Handle drag operations (could be used for drag-to-move, etc.)
-        Ok(())
-    }
-
-    fn handle_login_attempt(&mut self) -> anyhow::Result<()> {
-        let parts: Vec<&str> = self.input_buffer.split(':').collect();
-        if parts.len() != 2 {
-            // Show error - invalid format
-            self.input_buffer.clear();
-            return Ok(());
-        }
-
-        let name = parts[0].trim();
-        let password = parts[1].trim();
-
-        match self.database.authenticate(name, password) {
-            Ok(mut character) => {
-                character.update_last_played();
-                self.database.update_character(name, character.clone())?;
-                self.database.save(&self.db_path)?;
-                self.current_character = Some(character);
-                self.state = UIState::Playing;
-                self.input_buffer.clear();
-            }
-            Err(_) => {
-                // Show error - invalid credentials
-                self.input_buffer.clear();
-            }
-        }
         Ok(())
     }
 
@@ -1015,12 +936,17 @@ impl Game {
                             match self.database.create_character(name.clone(), password.to_string(), character.clone()) {
                                 Ok(()) => {
                                     self.database.save(&self.db_path)?;
-                                    self.current_character = Some(character);
-                                    self.state = UIState::Playing;
+                                    // Return to character list after creation
+                                    let character_list = self.database.list_characters();
+                                    let selected_index = if character_list.is_empty() { None } else { Some(0) };
+                                    self.state = UIState::CharacterList(character_list, selected_index);
                                 }
                                 Err(_) => {
                                     // Show error - character already exists
-                                    self.state = UIState::MainMenu;
+                                    // Return to character list
+                                    let character_list = self.database.list_characters();
+                                    let selected_index = if character_list.is_empty() { None } else { Some(0) };
+                                    self.state = UIState::CharacterList(character_list, selected_index);
                                 }
                             }
                         }
@@ -1352,6 +1278,26 @@ impl Game {
         }
 
         match key.code {
+            KeyCode::Char('c') | KeyCode::Char('n') => {
+                // Create new character
+                self.state = UIState::CharacterCreation(crate::ui::CharacterCreationState {
+                    step: crate::ui::CreationStep::Rolling,
+                    rolled_data: None,
+                    selected_race: None,
+                    character_name: None,
+                    selected_skills: Vec::new(),
+                    available_skill_points: 0,
+                    selected_spells: Vec::new(),
+                    available_spell_picks: 0,
+                    selected_gear: Vec::new(),
+                    current_selection_index: 0,
+                    available_skills_list: Vec::new(),
+                    available_spells_list: Vec::new(),
+                    available_gear_list: Vec::new(),
+                    starting_gold: 100,
+                    spent_gold: 0,
+                });
+            }
             KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') => {
                 let new_index = match selected_index {
                     Some(idx) => {
@@ -1390,12 +1336,14 @@ impl Game {
                                 self.database.update_character(character_name, character.clone())?;
                                 self.database.save(&self.db_path)?;
                                 self.current_character = Some(character);
-                                self.state = UIState::Playing;
+                                // Enter world exploration directly at their last position
+                                self.enter_world_exploration()?;
                             }
                             Err(_) => {
-                                // Authentication failed, return to main menu
-                                // In a real system, we'd show an error message
-                                self.state = UIState::MainMenu;
+                                // Authentication failed, return to character list
+                                let character_list = self.database.list_characters();
+                                let selected_index = if character_list.is_empty() { None } else { Some(0) };
+                                self.state = UIState::CharacterList(character_list, selected_index);
                             }
                         }
                     }

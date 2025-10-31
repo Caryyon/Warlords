@@ -30,7 +30,6 @@ pub struct GameUI {
 pub enum UIState {
     Welcome,
     MainMenu,
-    CharacterLogin,
     CharacterCreation(CharacterCreationState),
     CharacterList(Vec<(String, chrono::DateTime<chrono::Utc>)>, Option<usize>), // characters, selected_index
     Playing,
@@ -827,7 +826,6 @@ impl GameUI {
             match &state_clone {
                 UIState::Welcome => Self::draw_welcome_static(f),
                 UIState::MainMenu => Self::draw_main_menu_static(f, character_clone.as_ref()),
-                UIState::CharacterLogin => Self::draw_character_login_static(f, &input_clone),
                 UIState::CharacterCreation(creation_state) => Self::draw_character_creation_static(f, creation_state, &input_clone),
                 UIState::CharacterList(character_list, selected_index) => Self::draw_character_list_static(f, Some(character_list), *selected_index),
                 UIState::Playing => Self::draw_game_static(f, character_clone.as_ref()),
@@ -1164,52 +1162,6 @@ impl GameUI {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme.border_secondary)));
         f.render_widget(instructions_widget, chunks[2]);
-    }
-
-    fn draw_character_login_static(f: &mut Frame, input_buffer: &str) {
-        let area = f.size();
-        
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(0),
-            ])
-            .split(area);
-
-        let title = Paragraph::new("CHARACTER LOGIN")
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));
-        f.render_widget(title, chunks[0]);
-
-        let mut content_lines = vec![
-            Line::from(""),
-            Line::from("Enter character name and password"),
-            Line::from(Span::styled("Format: name:password", Style::default().fg(Color::Yellow))),
-            Line::from(Span::styled("Example: Aldric:mypassword", Style::default().fg(Color::DarkGray))),
-            Line::from(""),
-            Line::from(Span::styled("Type 'back' to return to main menu", Style::default().fg(Color::Green))),
-            Line::from(""),
-            Line::from("Character login: "),
-        ];
-
-        // Add input line
-        let input_line = if input_buffer.is_empty() {
-            Line::from(Span::styled("▶ _", Style::default().fg(Color::Yellow)))
-        } else {
-            Line::from(vec![
-                Span::styled("▶ ", Style::default().fg(Color::Yellow)),
-                Span::styled(input_buffer, Style::default().fg(Color::White)),
-                Span::styled("_", Style::default().fg(Color::Yellow)),
-            ])
-        };
-        content_lines.push(input_line);
-
-        let content = Paragraph::new(content_lines)
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::White)));
-        f.render_widget(content, chunks[1]);
     }
 
     fn draw_character_creation_static(f: &mut Frame, creation_state: &CharacterCreationState, input_buffer: &str) {
@@ -1838,8 +1790,9 @@ impl GameUI {
 
                 lines.extend(vec![
                     Line::from(Span::styled("Navigation:".to_string(), Style::default().fg(Color::Cyan))),
-                    Line::from("↑/↓ or W/S: Select character"),
+                    Line::from("↑/↓ or W/S or K/J: Select character"),
                     Line::from("ENTER: Play selected character"),
+                    Line::from("C or N: Create new character"),
                     Line::from("ESC: Return to main menu"),
                     Line::from(""),
                     Line::from(Span::styled("Select a character and press ENTER to play!".to_string(), Style::default().fg(Color::Green))),
