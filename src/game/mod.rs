@@ -3304,14 +3304,14 @@ impl Game {
     fn enter_dungeon(&mut self, poi: &crate::world::PointOfInterest, world_state: &mut WorldExplorationState) -> anyhow::Result<()> {
         // Save the current world state so we can restore it when exiting
         self.saved_world_state = Some(world_state.clone());
-        
+
         // Generate dungeon layout
         let seed = world_state.current_zone.x as u64 * 1000 + world_state.current_zone.y as u64 * 100 + poi.position.x as u64 * 10 + poi.position.y as u64;
         let generator = crate::world::DungeonGenerator::new();
         let dungeon = generator.generate_dungeon(poi.poi_type.clone(), poi.name.clone(), seed);
-        
+
         // Create dungeon exploration state
-        let dungeon_state = crate::ui::DungeonExplorationState {
+        let mut dungeon_state = crate::ui::DungeonExplorationState {
             dungeon,
             player_pos: crate::world::LocalCoord::new(crate::world::DUNGEON_WIDTH / 2, crate::world::DUNGEON_HEIGHT - 2), // Entrance
             messages: vec![
@@ -3322,10 +3322,13 @@ impl Game {
             turn_count: 0,
             active_tactical_combat: None,
         };
-        
+
+        // Calculate initial visibility based on character's vision radius and torch status
+        self.update_visibility(&mut dungeon_state);
+
         // Switch to dungeon exploration mode
         self.state = crate::ui::UIState::DungeonExploration(dungeon_state);
-        
+
         Ok(())
     }
 
