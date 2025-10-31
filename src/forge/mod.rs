@@ -231,6 +231,46 @@ pub enum SkillType {
     Magic,       // Magic school skills
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkillCategory {
+    Basic,       // Basic skills with simple base calculations
+    Percentile,  // Percentile skills that can advance beyond 100%
+    Combat,      // Combat skills with level/percentage system
+    Magic,       // Magic school skills
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkillBase {
+    StrengthX2,
+    StaminaX2,
+    IntellectX2,
+    InsightX2,
+    DexterityX2,
+    AwarenessX2,
+    StrengthPlusDexterity,
+    DexterityPlusAwareness,
+    AwarenessPlusIntellect,
+    StrengthPlusInsight,
+    PowerBased,
+}
+
+#[derive(Debug, Clone)]
+pub struct SkillDefinition {
+    pub name: String,
+    pub category: SkillCategory,
+    pub base: SkillBase,
+}
+
+impl SkillDefinition {
+    pub fn new(name: &str, category: SkillCategory, base: SkillBase) -> Self {
+        Self {
+            name: name.to_string(),
+            category,
+            base,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SkillAdvancementResult {
     pub skill_name: String,
@@ -928,7 +968,7 @@ impl ForgeCharacter {
             .ok_or("Invalid inventory index")?;
             
         match &item.item_type {
-            ItemType::Weapon(weapon) => {
+            ItemType::Weapon(_weapon) => {
                 let removed_item = self.inventory.remove_item(inventory_index)
                     .ok_or("Failed to remove item from inventory")?;
                 
@@ -943,7 +983,7 @@ impl ForgeCharacter {
                     Err("Item type mismatch".to_string())
                 }
             }
-            ItemType::Armor(armor) => {
+            ItemType::Armor(_armor) => {
                 let removed_item = self.inventory.remove_item(inventory_index)
                     .ok_or("Failed to remove item from inventory")?;
                 
@@ -967,7 +1007,7 @@ impl ForgeCharacter {
                     Err("Item type mismatch".to_string())
                 }
             }
-            ItemType::Accessory(accessory) => {
+            ItemType::Accessory(_accessory) => {
                 let removed_item = self.inventory.remove_item(inventory_index)
                     .ok_or("Failed to remove item from inventory")?;
                 
@@ -1047,6 +1087,179 @@ impl ForgeCharacter {
                 }
             }
         }
+    }
+    
+    // Comprehensive skill system for showing trained and untrained skills
+    
+    pub fn get_all_available_skills() -> Vec<SkillDefinition> {
+        vec![
+            // Basic Skills (DEX x2 base)
+            SkillDefinition::new("Climbing", SkillCategory::Basic, SkillBase::DexterityX2),
+            SkillDefinition::new("Move Silently", SkillCategory::Basic, SkillBase::DexterityX2),
+            SkillDefinition::new("Hide", SkillCategory::Basic, SkillBase::DexterityX2),
+            SkillDefinition::new("Sleight of Hand", SkillCategory::Basic, SkillBase::DexterityX2),
+            SkillDefinition::new("Tumbling", SkillCategory::Basic, SkillBase::DexterityX2),
+            SkillDefinition::new("Lock Picking", SkillCategory::Basic, SkillBase::DexterityX2),
+            
+            // Basic Skills (STR x2 base)
+            SkillDefinition::new("Swimming", SkillCategory::Basic, SkillBase::StrengthX2),
+            SkillDefinition::new("Jump", SkillCategory::Basic, SkillBase::StrengthX2),
+            
+            // Basic Skills (INT x2 base)
+            SkillDefinition::new("Plant ID", SkillCategory::Basic, SkillBase::IntellectX2),
+            SkillDefinition::new("Track ID", SkillCategory::Basic, SkillBase::IntellectX2),
+            SkillDefinition::new("History", SkillCategory::Basic, SkillBase::IntellectX2),
+            SkillDefinition::new("Lore", SkillCategory::Basic, SkillBase::IntellectX2),
+            SkillDefinition::new("Language", SkillCategory::Basic, SkillBase::IntellectX2),
+            
+            // Basic Skills (AWR x2 base)
+            SkillDefinition::new("Perception", SkillCategory::Basic, SkillBase::AwarenessX2),
+            SkillDefinition::new("Listen", SkillCategory::Basic, SkillBase::AwarenessX2),
+            SkillDefinition::new("Search", SkillCategory::Basic, SkillBase::AwarenessX2),
+            
+            // Basic Skills (STA x2 base)
+            SkillDefinition::new("Survival", SkillCategory::Basic, SkillBase::StaminaX2),
+            SkillDefinition::new("Endurance", SkillCategory::Basic, SkillBase::StaminaX2),
+            
+            // Combination Skills
+            SkillDefinition::new("Tactics", SkillCategory::Basic, SkillBase::DexterityPlusAwareness),
+            SkillDefinition::new("Blind Fighting", SkillCategory::Basic, SkillBase::DexterityPlusAwareness),
+            SkillDefinition::new("Weapon Stomp", SkillCategory::Basic, SkillBase::DexterityPlusAwareness),
+            SkillDefinition::new("Tracking", SkillCategory::Basic, SkillBase::AwarenessPlusIntellect),
+            
+            // Percentile Skills
+            SkillDefinition::new("Crafting", SkillCategory::Percentile, SkillBase::IntellectX2),
+            SkillDefinition::new("Healing", SkillCategory::Percentile, SkillBase::IntellectX2),
+            SkillDefinition::new("Singing", SkillCategory::Percentile, SkillBase::InsightX2),
+            SkillDefinition::new("Alchemy", SkillCategory::Percentile, SkillBase::IntellectX2),
+            SkillDefinition::new("Engineering", SkillCategory::Percentile, SkillBase::IntellectX2),
+            SkillDefinition::new("Leadership", SkillCategory::Percentile, SkillBase::InsightX2),
+            SkillDefinition::new("Intimidation", SkillCategory::Percentile, SkillBase::StrengthPlusInsight),
+            SkillDefinition::new("Persuasion", SkillCategory::Percentile, SkillBase::InsightX2),
+            
+            // Combat Skills (STR + DEX base)
+            SkillDefinition::new("Sword", SkillCategory::Combat, SkillBase::StrengthPlusDexterity),
+            SkillDefinition::new("Axe", SkillCategory::Combat, SkillBase::StrengthPlusDexterity),
+            SkillDefinition::new("Mace", SkillCategory::Combat, SkillBase::StrengthPlusDexterity),
+            SkillDefinition::new("Spear", SkillCategory::Combat, SkillBase::StrengthPlusDexterity),
+            SkillDefinition::new("Dagger", SkillCategory::Combat, SkillBase::StrengthPlusDexterity),
+            SkillDefinition::new("Staff", SkillCategory::Combat, SkillBase::StrengthPlusDexterity),
+            SkillDefinition::new("Unarmed Combat", SkillCategory::Combat, SkillBase::StrengthPlusDexterity),
+            SkillDefinition::new("Shield", SkillCategory::Combat, SkillBase::StrengthPlusDexterity),
+            
+            // Missile Combat Skills (DEX x2 base)
+            SkillDefinition::new("Bow", SkillCategory::Combat, SkillBase::DexterityX2),
+            SkillDefinition::new("Crossbow", SkillCategory::Combat, SkillBase::DexterityX2),
+            SkillDefinition::new("Javelin", SkillCategory::Combat, SkillBase::DexterityX2),
+            SkillDefinition::new("Sling", SkillCategory::Combat, SkillBase::DexterityX2),
+            
+            // Magic Skills (handled separately but listed for completeness)
+            SkillDefinition::new("Beast Magic", SkillCategory::Magic, SkillBase::PowerBased),
+            SkillDefinition::new("Elemental Magic", SkillCategory::Magic, SkillBase::PowerBased),
+            SkillDefinition::new("Enchantment Magic", SkillCategory::Magic, SkillBase::PowerBased),
+            SkillDefinition::new("Necromancer Magic", SkillCategory::Magic, SkillBase::PowerBased),
+            SkillDefinition::new("Divine Magic", SkillCategory::Magic, SkillBase::PowerBased),
+            SkillDefinition::new("Mind Magic", SkillCategory::Magic, SkillBase::PowerBased),
+        ]
+    }
+    
+    pub fn calculate_skill_base(&self, skill_base: &SkillBase) -> u8 {
+        match skill_base {
+            SkillBase::StrengthX2 => (self.characteristics.strength * 2.0) as u8,
+            SkillBase::StaminaX2 => (self.characteristics.stamina * 2.0) as u8,
+            SkillBase::IntellectX2 => (self.characteristics.intellect * 2.0) as u8,
+            SkillBase::InsightX2 => (self.characteristics.insight * 2.0) as u8,
+            SkillBase::DexterityX2 => (self.characteristics.dexterity * 2.0) as u8,
+            SkillBase::AwarenessX2 => (self.characteristics.awareness * 2.0) as u8,
+            SkillBase::StrengthPlusDexterity => (self.characteristics.strength + self.characteristics.dexterity) as u8,
+            SkillBase::DexterityPlusAwareness => (self.characteristics.dexterity + self.characteristics.awareness) as u8,
+            SkillBase::AwarenessPlusIntellect => (self.characteristics.awareness + self.characteristics.intellect) as u8,
+            SkillBase::StrengthPlusInsight => (self.characteristics.strength + self.characteristics.insight) as u8,
+            SkillBase::PowerBased => self.magic.spell_points.max as u8, // Magic skills use spell points as base
+        }
+    }
+    
+    pub fn get_effective_skill_value(&self, skill_name: &str) -> (u8, bool) {
+        // Returns (skill_value, is_trained)
+        
+        // Check if it's a trained skill first
+        if let Some(&level) = self.skills.get(skill_name) {
+            return (level, true);
+        }
+        
+        // Check if it's a trained combat skill
+        if let Some(&(level, percentage)) = self.combat_skills.get(skill_name) {
+            return (if level > 0 { percentage } else { percentage.max(self.get_untrained_combat_base(skill_name)) }, level > 0);
+        }
+        
+        // Check magic skills
+        let magic_schools = [
+            ("Beast Magic", magic::MagicSchool::Beast),
+            ("Elemental Magic", magic::MagicSchool::Elemental),
+            ("Enchantment Magic", magic::MagicSchool::Enchantment),
+            ("Necromancer Magic", magic::MagicSchool::Necromancer),
+            ("Divine Magic", magic::MagicSchool::Divine),
+            ("Mind Magic", magic::MagicSchool::Beast), // Note: Mind Magic might be its own school
+        ];
+        
+        for (name, school) in magic_schools {
+            if skill_name == name {
+                let skill_level = self.magic.get_school_skill(&school);
+                return (skill_level * 5, skill_level > 0); // Convert level to percentage
+            }
+        }
+        
+        // Return untrained base calculation
+        let all_skills = Self::get_all_available_skills();
+        for skill_def in all_skills {
+            if skill_def.name == skill_name {
+                return (self.calculate_skill_base(&skill_def.base), false);
+            }
+        }
+        
+        // Default if skill not found
+        (0, false)
+    }
+    
+    fn get_untrained_combat_base(&self, skill_name: &str) -> u8 {
+        let all_skills = Self::get_all_available_skills();
+        for skill_def in all_skills {
+            if skill_def.name == skill_name && skill_def.category == SkillCategory::Combat {
+                return self.calculate_skill_base(&skill_def.base);
+            }
+        }
+        0
+    }
+    
+    pub fn get_skills_by_category(&self) -> (Vec<(String, u8, bool)>, Vec<(String, u8, bool)>, Vec<(String, u8, bool)>, Vec<(String, u8, bool)>) {
+        // Returns (basic_skills, percentile_skills, combat_skills, magic_skills)
+        // Each tuple is (name, value, is_trained)
+        
+        let all_skills = Self::get_all_available_skills();
+        let mut basic_skills = Vec::new();
+        let mut percentile_skills = Vec::new();
+        let mut combat_skills = Vec::new();
+        let mut magic_skills = Vec::new();
+        
+        for skill_def in all_skills {
+            let (value, is_trained) = self.get_effective_skill_value(&skill_def.name);
+            let skill_info = (skill_def.name.clone(), value, is_trained);
+            
+            match skill_def.category {
+                SkillCategory::Basic => basic_skills.push(skill_info),
+                SkillCategory::Percentile => percentile_skills.push(skill_info),
+                SkillCategory::Combat => combat_skills.push(skill_info),
+                SkillCategory::Magic => magic_skills.push(skill_info),
+            }
+        }
+        
+        // Sort each category by name
+        basic_skills.sort_by(|a, b| a.0.cmp(&b.0));
+        percentile_skills.sort_by(|a, b| a.0.cmp(&b.0));
+        combat_skills.sort_by(|a, b| a.0.cmp(&b.0));
+        magic_skills.sort_by(|a, b| a.0.cmp(&b.0));
+        
+        (basic_skills, percentile_skills, combat_skills, magic_skills)
     }
 }
 

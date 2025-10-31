@@ -86,7 +86,9 @@
         "current_position": {
           "x": 32,
           "y": 32
-        }
+        },
+        "vision_radius": 2,
+        "torch_lit": false
       },
       "password_hash": "45bc6b2f65035755218ebbc5941a172404c1044ee2a8230f33b9823128bab476",
       "salt": "daa6ddef01f771ad"
@@ -151,11 +153,11 @@
         "level": 1,
         "experience": 0,
         "skills": {
-          "Crafting": 1,
           "Lore": 1,
+          "Perception": 1,
           "Mind Magic": 1,
           "Survival": 1,
-          "Perception": 1
+          "Crafting": 1
         },
         "skill_pips": {},
         "magic": {
@@ -189,7 +191,7 @@
         ],
         "gold": 10,
         "created_at": "2025-06-26T13:01:51.413354Z",
-        "last_played": "2025-06-26T13:19:29.253510Z",
+        "last_played": "2025-06-26T17:22:27.037387Z",
         "current_zone": {
           "x": 4,
           "y": 4
@@ -197,7 +199,9 @@
         "current_position": {
           "x": 32,
           "y": 32
-        }
+        },
+        "vision_radius": 2,
+        "torch_lit": false
       },
       "password_hash": "318579ff7d8fb584004ddeedd004dfed1b2d1982808fba808103241ec5b3aa74",
       "salt": "8108e3191a7446d6"

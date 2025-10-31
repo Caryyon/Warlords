@@ -32,6 +32,16 @@ pub enum SpellTarget {
     AllEnemies,         // All enemies in combat
     AllAllies,          // All allies in combat
     Area(u8),          // Area effect with radius
+    Line(u8),          // Line effect with length
+    Cone(u8),          // Cone effect with range
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TacticalSpellInfo {
+    pub range: u8,              // Maximum range in tiles (0 = melee/touch)
+    pub requires_line_of_sight: bool,
+    pub affects_terrain: bool,   // Can the spell modify battlefield terrain?
+    pub friendly_fire: bool,     // Can area spells hurt allies?
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,25 +76,63 @@ pub struct Spell {
     pub name: String,
     pub school: MagicSchool,
     pub level: u8,             // Spell level (1-5)
-    pub cost: u8,              // Spell points required
+    pub cost: u8,              // Base spell points required
     pub target: SpellTarget,
     pub effects: Vec<SpellEffect>,
     pub description: String,
     pub success_chance_base: u8,  // Base success chance (modified by skill)
     pub backfire_chance: u8,      // Chance of backfire on failure
+    pub tactical_info: Option<TacticalSpellInfo>, // Tactical combat targeting info
+    
+    // Forge spell enhancement system
+    pub additional_spell_points: u8,  // Extra SP cost per enhancement
+    pub max_pumps: u8,               // Maximum number of times this spell can be enhanced
+    pub component_break_chance: u8,   // Base chance of breaking magical component
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpellEnhancement {
+    pub pumps: u8,                    // Number of enhancements applied
+    pub enhanced_range: bool,         // Range enhancement
+    pub enhanced_duration: bool,      // Duration enhancement
+    pub enhanced_damage: bool,        // Damage enhancement
+    pub enhanced_save_modifier: bool, // Save modifier enhancement
+    pub enhanced_success_chance: bool,// Success chance enhancement
+    pub total_cost: u8,              // Total spell points including enhancements
+}
+
+impl Default for SpellEnhancement {
+    fn default() -> Self {
+        Self {
+            pumps: 0,
+            enhanced_range: false,
+            enhanced_duration: false,
+            enhanced_damage: false,
+            enhanced_save_modifier: false,
+            enhanced_success_chance: false,
+            total_cost: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SpellResult {
     Success {
         effects_applied: Vec<String>,
+        component_intact: bool,       // Whether magical component survived
     },
     Failure {
         message: String,
+        component_intact: bool,
     },
     Backfire {
         message: String,
         damage_to_caster: Option<u32>,
+        component_intact: bool,
+    },
+    ComponentBreak {
+        message: String,
+        damage_to_caster: u32,        // Damage from component breaking
     },
 }
 
@@ -144,6 +192,51 @@ impl MagicSystem {
         }
         all_spells
     }
+    
+    pub fn can_cast_enhanced_spell(&self, _spell: &Spell, enhancement: &SpellEnhancement) -> bool {
+        self.spell_points.current >= enhancement.total_cost as u32
+    }
+    
+    pub fn calculate_enhancement_cost(&self, spell: &Spell, enhancement: &SpellEnhancement) -> u8 {
+        let base_cost = spell.cost;
+        let enhancement_cost = spell.additional_spell_points * enhancement.pumps;
+        base_cost + enhancement_cost
+    }
+    
+    pub fn get_school_enhancement_bonuses(&self, school: &MagicSchool) -> (u8, u8, u8, u8, u8) {
+        // Returns (range_bonus, duration_bonus, damage_bonus, save_modifier, success_bonus)
+        match school {
+            MagicSchool::Beast => (5, 10, 1, 1, 15),
+            MagicSchool::Elemental => (15, 2, 3, 1, 5),
+            MagicSchool::Necromancer => (10, 5, 2, 1, 10),
+            MagicSchool::Enchantment => (8, 8, 1, 2, 12),
+            MagicSchool::Divine => (12, 6, 2, 1, 8),
+        }
+    }
+    
+    pub fn calculate_component_break_chance(&self, spell: &Spell, enhancement: &SpellEnhancement, magic_skill: u8) -> u8 {
+        let base_chance = spell.component_break_chance;
+        let pump_modifier = enhancement.pumps * 5; // +5% per pump
+        let skill_reduction = if magic_skill >= 20 {
+            // Master level: significant reduction
+            if spell.level <= 1 && enhancement.pumps <= 2 {
+                return 0; // No risk for low-level spells
+            }
+            20
+        } else {
+            magic_skill / 2 // Skill reduces risk
+        };
+        
+        (base_chance + pump_modifier).saturating_sub(skill_reduction)
+    }
+    
+    pub fn calculate_component_break_damage(&self, enhancement: &SpellEnhancement) -> u32 {
+        if enhancement.pumps == 0 {
+            0
+        } else {
+            2_u32.pow(enhancement.pumps as u32) // 2, 4, 8, 16...
+        }
+    }
 }
 
 impl std::fmt::Display for MagicSchool {
@@ -176,6 +269,15 @@ pub fn create_starter_spells() -> HashMap<String, Spell> {
         description: "Allows the caster to speak with and understand animals.".to_string(),
         success_chance_base: 70,
         backfire_chance: 10,
+        tactical_info: Some(TacticalSpellInfo {
+            range: 0,
+            requires_line_of_sight: false,
+            affects_terrain: false,
+            friendly_fire: false,
+        }),
+        additional_spell_points: 3,
+        max_pumps: 1,
+        component_break_chance: 25,
     });
     
     spells.insert("Bear Strength".to_string(), Spell {
@@ -192,6 +294,15 @@ pub fn create_starter_spells() -> HashMap<String, Spell> {
         description: "Grants the strength of a bear, increasing damage for 5 rounds.".to_string(),
         success_chance_base: 65,
         backfire_chance: 15,
+        tactical_info: Some(TacticalSpellInfo {
+            range: 3,
+            requires_line_of_sight: true,
+            affects_terrain: false,
+            friendly_fire: false,
+        }),
+        additional_spell_points: 4,
+        max_pumps: 1,
+        component_break_chance: 25,
     });
     
     // Elemental Magic Spells
@@ -209,6 +320,15 @@ pub fn create_starter_spells() -> HashMap<String, Spell> {
         description: "Hurls a bolt of fire at a single enemy.".to_string(),
         success_chance_base: 75,
         backfire_chance: 10,
+        tactical_info: Some(TacticalSpellInfo {
+            range: 6,
+            requires_line_of_sight: true,
+            affects_terrain: false,
+            friendly_fire: false,
+        }),
+        additional_spell_points: 2,
+        max_pumps: 1,
+        component_break_chance: 25,
     });
     
     spells.insert("Lightning Strike".to_string(), Spell {
@@ -225,6 +345,15 @@ pub fn create_starter_spells() -> HashMap<String, Spell> {
         description: "Calls down a lightning bolt on a single enemy.".to_string(),
         success_chance_base: 65,
         backfire_chance: 20,
+        tactical_info: Some(TacticalSpellInfo {
+            range: 8,
+            requires_line_of_sight: false,
+            affects_terrain: false,
+            friendly_fire: false,
+        }),
+        additional_spell_points: 3,
+        max_pumps: 1,
+        component_break_chance: 30,
     });
     
     // Enchantment Magic Spells
@@ -242,6 +371,15 @@ pub fn create_starter_spells() -> HashMap<String, Spell> {
         description: "Blesses a weapon, increasing attack accuracy for 8 rounds.".to_string(),
         success_chance_base: 80,
         backfire_chance: 5,
+        tactical_info: Some(TacticalSpellInfo {
+            range: 1,
+            requires_line_of_sight: true,
+            affects_terrain: false,
+            friendly_fire: false,
+        }),
+        additional_spell_points: 2,
+        max_pumps: 1,
+        component_break_chance: 20,
     });
     
     spells.insert("Shield of Faith".to_string(), Spell {
@@ -258,6 +396,15 @@ pub fn create_starter_spells() -> HashMap<String, Spell> {
         description: "Creates a magical shield that increases defense for 6 rounds.".to_string(),
         success_chance_base: 75,
         backfire_chance: 10,
+        tactical_info: Some(TacticalSpellInfo {
+            range: 3,
+            requires_line_of_sight: true,
+            affects_terrain: false,
+            friendly_fire: false,
+        }),
+        additional_spell_points: 3,
+        max_pumps: 1,
+        component_break_chance: 20,
     });
     
     // Necromancer Magic Spells
@@ -281,6 +428,15 @@ pub fn create_starter_spells() -> HashMap<String, Spell> {
         description: "Drains life from an enemy and heals the caster.".to_string(),
         success_chance_base: 60,
         backfire_chance: 25,
+        tactical_info: Some(TacticalSpellInfo {
+            range: 4,
+            requires_line_of_sight: true,
+            affects_terrain: false,
+            friendly_fire: false,
+        }),
+        additional_spell_points: 5,
+        max_pumps: 1,
+        component_break_chance: 30,
     });
     
     spells.insert("Weaken".to_string(), Spell {
@@ -297,6 +453,15 @@ pub fn create_starter_spells() -> HashMap<String, Spell> {
         description: "Weakens an enemy, reducing their attack for 4 rounds.".to_string(),
         success_chance_base: 70,
         backfire_chance: 15,
+        tactical_info: Some(TacticalSpellInfo {
+            range: 5,
+            requires_line_of_sight: true,
+            affects_terrain: false,
+            friendly_fire: false,
+        }),
+        additional_spell_points: 3,
+        max_pumps: 1,
+        component_break_chance: 25,
     });
     
     // Divine Magic Spells
@@ -313,6 +478,15 @@ pub fn create_starter_spells() -> HashMap<String, Spell> {
         description: "Channels divine energy to heal wounds.".to_string(),
         success_chance_base: 85,
         backfire_chance: 5,
+        tactical_info: Some(TacticalSpellInfo {
+            range: 2,
+            requires_line_of_sight: true,
+            affects_terrain: false,
+            friendly_fire: false,
+        }),
+        additional_spell_points: 2,
+        max_pumps: 1,
+        component_break_chance: 15,
     });
     
     spells.insert("Turn Undead".to_string(), Spell {
@@ -328,6 +502,15 @@ pub fn create_starter_spells() -> HashMap<String, Spell> {
         description: "Channels divine power to turn away undead creatures.".to_string(),
         success_chance_base: 70,
         backfire_chance: 10,
+        tactical_info: Some(TacticalSpellInfo {
+            range: 3,
+            requires_line_of_sight: false,
+            affects_terrain: false,
+            friendly_fire: false,
+        }),
+        additional_spell_points: 4,
+        max_pumps: 1,
+        component_break_chance: 20,
     });
     
     spells

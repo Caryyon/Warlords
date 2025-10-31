@@ -1,5 +1,437 @@
 {
   "characters": {
+    "Xor": {
+      "character": {
+        "name": "Xor",
+        "characteristics": {
+          "strength": 5.2,
+          "stamina": 9.7,
+          "intellect": 11.7,
+          "insight": 5.0,
+          "dexterity": 8.5,
+          "awareness": 7.4,
+          "speed": 3,
+          "power": 13,
+          "luck": 11
+        },
+        "combat_stats": {
+          "hit_points": {
+            "current": 7,
+            "max": 7
+          },
+          "attack_value": 11,
+          "defensive_value": 12,
+          "damage_bonus": -1
+        },
+        "race": {
+          "name": "Dunnar",
+          "description": "Pale, thin beings with undead appearance. Mind protection but photosensitive.",
+          "characteristic_modifiers": {
+            "strength": 0.0,
+            "stamina": 0.0,
+            "intellect": 0.0,
+            "insight": 0.0,
+            "dexterity": 0.0,
+            "awareness": 0.0,
+            "speed": 0,
+            "power": 0,
+            "luck": 0
+          },
+          "limits": {
+            "strength": 9.0,
+            "stamina": null,
+            "intellect": null,
+            "insight": null,
+            "dexterity": null,
+            "awareness": null
+          },
+          "starting_skills": [
+            [
+              "Mind Magic",
+              1
+            ]
+          ],
+          "special_abilities": [
+            "Mind Protection",
+            "Detect Magic by Touch",
+            "Photosensitive (1 dmg/hour in sun)"
+          ]
+        },
+        "level": 1,
+        "experience": 0,
+        "skills": {
+          "Dagger": 1,
+          "Mind Magic": 1,
+          "Necromancer Magic": 1,
+          "Herbalism": 1
+        },
+        "skill_pips": {},
+        "combat_skills": {},
+        "magic": {
+          "spell_points": {
+            "current": 26,
+            "max": 26
+          },
+          "known_spells": {
+            "Necromancer": [
+              "Drain Life",
+              "Weaken"
+            ]
+          },
+          "school_skills": {
+            "Necromancer": 1
+          },
+          "school_pips": {}
+        },
+        "equipment": {
+          "weapon": null,
+          "armor": null,
+          "shield": null,
+          "accessory1": null,
+          "accessory2": null
+        },
+        "inventory": {
+          "items": [
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Trade",
+                  "special_properties": [
+                    "Starting equipment"
+                  ]
+                }
+              },
+              "name": "Farm Clothes",
+              "weight": 2.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 5,
+              "description": "Simple farming clothes. Provides basic protection from the elements."
+            },
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Tool",
+                  "special_properties": [
+                    "Basic crafting"
+                  ]
+                }
+              },
+              "name": "Simple Tools",
+              "weight": 3.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 15,
+              "description": "A collection of basic tools for everyday tasks."
+            },
+            {
+              "item_type": {
+                "Consumable": {
+                  "consumable_type": "Torch",
+                  "effect": "Provides light in dark areas",
+                  "duration": 50
+                }
+              },
+              "name": "Torch",
+              "weight": 1.0,
+              "stack_size": 20,
+              "quantity": 3,
+              "value": 2,
+              "description": "A wooden torch that provides light for about an hour."
+            },
+            {
+              "item_type": {
+                "Consumable": {
+                  "consumable_type": "Food",
+                  "effect": "Restores hunger and provides minor healing",
+                  "duration": null
+                }
+              },
+              "name": "Trail Rations",
+              "weight": 1.5,
+              "stack_size": 10,
+              "quantity": 3,
+              "value": 1,
+              "description": "Dried food suitable for long journeys."
+            },
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Trade",
+                  "special_properties": [
+                    "Starting gear"
+                  ]
+                }
+              },
+              "name": "Backpack",
+              "weight": 1.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 10,
+              "description": "Starting equipment"
+            },
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Trade",
+                  "special_properties": [
+                    "Starting gear"
+                  ]
+                }
+              },
+              "name": "Bedroll",
+              "weight": 1.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 10,
+              "description": "Starting equipment"
+            },
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Trade",
+                  "special_properties": [
+                    "Starting gear"
+                  ]
+                }
+              },
+              "name": "Waterskin",
+              "weight": 1.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 10,
+              "description": "Starting equipment"
+            },
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Trade",
+                  "special_properties": [
+                    "Starting gear"
+                  ]
+                }
+              },
+              "name": "Torch (5)",
+              "weight": 1.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 10,
+              "description": "Starting equipment"
+            },
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Trade",
+                  "special_properties": [
+                    "Starting gear"
+                  ]
+                }
+              },
+              "name": "Staff",
+              "weight": 1.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 10,
+              "description": "Starting equipment"
+            },
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Trade",
+                  "special_properties": [
+                    "Starting gear"
+                  ]
+                }
+              },
+              "name": "Rations (1 week)",
+              "weight": 1.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 10,
+              "description": "Starting equipment"
+            },
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Trade",
+                  "special_properties": [
+                    "Starting gear"
+                  ]
+                }
+              },
+              "name": "Dagger",
+              "weight": 1.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 10,
+              "description": "Starting equipment"
+            },
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Trade",
+                  "special_properties": [
+                    "Starting gear"
+                  ]
+                }
+              },
+              "name": "Rope (50 ft)",
+              "weight": 1.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 10,
+              "description": "Starting equipment"
+            },
+            {
+              "item_type": {
+                "Misc": {
+                  "misc_type": "Trade",
+                  "special_properties": [
+                    "Starting gear"
+                  ]
+                }
+              },
+              "name": "Spell Components",
+              "weight": 1.0,
+              "stack_size": 1,
+              "quantity": 1,
+              "value": 10,
+              "description": "Starting equipment"
+            }
+          ],
+          "max_weight": 52.0,
+          "weight_penalty": 0.0
+        },
+        "gold": 71,
+        "created_at": "2025-10-31T14:41:47.597014Z",
+        "last_played": "2025-10-31T14:47:17.428356Z",
+        "current_zone": {
+          "x": 4,
+          "y": 4
+        },
+        "current_position": {
+          "x": 32,
+          "y": 32
+        },
+        "vision_radius": 2,
+        "torch_lit": false
+      },
+      "password_hash": "e3adac26f6eaa01cfe6d16893d6aa7abc465e19834e82099130d756546ffb4d4",
+      "salt": "f4baae46c01ef663"
+    },
+    "Necromancer": {
+      "character": {
+        "name": "Necromancer",
+        "characteristics": {
+          "strength": 8.5,
+          "stamina": 11.6,
+          "intellect": 12.0,
+          "insight": 8.0,
+          "dexterity": 10.0,
+          "awareness": 8.0,
+          "speed": 4,
+          "power": 14,
+          "luck": 13
+        },
+        "combat_stats": {
+          "hit_points": {
+            "current": 10,
+            "max": 10
+          },
+          "attack_value": 14,
+          "defensive_value": 14,
+          "damage_bonus": 0
+        },
+        "race": {
+          "name": "Dunnar",
+          "description": "Pale, thin beings with undead appearance. Mind protection but photosensitive.",
+          "characteristic_modifiers": {
+            "strength": 0.0,
+            "stamina": 0.0,
+            "intellect": 0.0,
+            "insight": 0.0,
+            "dexterity": 0.0,
+            "awareness": 0.0,
+            "speed": 0,
+            "power": 0,
+            "luck": 0
+          },
+          "limits": {
+            "strength": 9.0,
+            "stamina": null,
+            "intellect": null,
+            "insight": null,
+            "dexterity": null,
+            "awareness": null
+          },
+          "starting_skills": [
+            [
+              "Mind Magic",
+              1
+            ]
+          ],
+          "special_abilities": [
+            "Mind Protection",
+            "Detect Magic by Touch",
+            "Photosensitive (1 dmg/hour in sun)"
+          ]
+        },
+        "level": 1,
+        "experience": 0,
+        "skills": {
+          "Survival": 1,
+          "Lore": 1,
+          "Perception": 1,
+          "Crafting": 1,
+          "Mind Magic": 1
+        },
+        "skill_pips": {},
+        "combat_skills": {},
+        "magic": {
+          "spell_points": {
+            "current": 28,
+            "max": 28
+          },
+          "known_spells": {
+            "Necromancer": [
+              "Drain Life",
+              "Weaken"
+            ]
+          },
+          "school_skills": {
+            "Necromancer": 1
+          },
+          "school_pips": {}
+        },
+        "equipment": {
+          "weapon": null,
+          "armor": null,
+          "shield": null,
+          "accessory1": null,
+          "accessory2": null
+        },
+        "inventory": {
+          "items": [],
+          "max_weight": 85.0,
+          "weight_penalty": 0.0
+        },
+        "gold": 10,
+        "created_at": "2025-06-26T13:01:51.413354Z",
+        "last_played": "2025-06-27T13:16:42.806607Z",
+        "current_zone": {
+          "x": 4,
+          "y": 4
+        },
+        "current_position": {
+          "x": 32,
+          "y": 32
+        },
+        "vision_radius": 2,
+        "torch_lit": false
+      },
+      "password_hash": "318579ff7d8fb584004ddeedd004dfed1b2d1982808fba808103241ec5b3aa74",
+      "salt": "8108e3191a7446d6"
+    },
     "Zocora": {
       "character": {
         "name": "Zocora",
@@ -163,9 +595,9 @@
         "experience": 0,
         "skills": {
           "Melee Combat": 1,
-          "Perception": 1,
           "Necromancer Magic": 1,
-          "Mind Magic": 1
+          "Mind Magic": 1,
+          "Perception": 1
         },
         "skill_pips": {},
         "combat_skills": {},
@@ -422,7 +854,7 @@
         },
         "gold": 66,
         "created_at": "2025-06-27T14:04:36.450297Z",
-        "last_played": "2025-06-28T02:54:55.846799Z",
+        "last_played": "2025-07-01T03:23:15.557439Z",
         "current_zone": {
           "x": 4,
           "y": 4
@@ -436,119 +868,6 @@
       },
       "password_hash": "180c5facdcade490ea5f5e2290efeeb7e2c04d719a64b9dab0de4600bf76a352",
       "salt": "7c8abf74c32110d5"
-    },
-    "Necromancer": {
-      "character": {
-        "name": "Necromancer",
-        "characteristics": {
-          "strength": 8.5,
-          "stamina": 11.6,
-          "intellect": 12.0,
-          "insight": 8.0,
-          "dexterity": 10.0,
-          "awareness": 8.0,
-          "speed": 4,
-          "power": 14,
-          "luck": 13
-        },
-        "combat_stats": {
-          "hit_points": {
-            "current": 10,
-            "max": 10
-          },
-          "attack_value": 14,
-          "defensive_value": 14,
-          "damage_bonus": 0
-        },
-        "race": {
-          "name": "Dunnar",
-          "description": "Pale, thin beings with undead appearance. Mind protection but photosensitive.",
-          "characteristic_modifiers": {
-            "strength": 0.0,
-            "stamina": 0.0,
-            "intellect": 0.0,
-            "insight": 0.0,
-            "dexterity": 0.0,
-            "awareness": 0.0,
-            "speed": 0,
-            "power": 0,
-            "luck": 0
-          },
-          "limits": {
-            "strength": 9.0,
-            "stamina": null,
-            "intellect": null,
-            "insight": null,
-            "dexterity": null,
-            "awareness": null
-          },
-          "starting_skills": [
-            [
-              "Mind Magic",
-              1
-            ]
-          ],
-          "special_abilities": [
-            "Mind Protection",
-            "Detect Magic by Touch",
-            "Photosensitive (1 dmg/hour in sun)"
-          ]
-        },
-        "level": 1,
-        "experience": 0,
-        "skills": {
-          "Crafting": 1,
-          "Mind Magic": 1,
-          "Lore": 1,
-          "Survival": 1,
-          "Perception": 1
-        },
-        "skill_pips": {},
-        "combat_skills": {},
-        "magic": {
-          "spell_points": {
-            "current": 28,
-            "max": 28
-          },
-          "known_spells": {
-            "Necromancer": [
-              "Drain Life",
-              "Weaken"
-            ]
-          },
-          "school_skills": {
-            "Necromancer": 1
-          },
-          "school_pips": {}
-        },
-        "equipment": {
-          "weapon": null,
-          "armor": null,
-          "shield": null,
-          "accessory1": null,
-          "accessory2": null
-        },
-        "inventory": {
-          "items": [],
-          "max_weight": 85.0,
-          "weight_penalty": 0.0
-        },
-        "gold": 10,
-        "created_at": "2025-06-26T13:01:51.413354Z",
-        "last_played": "2025-06-27T13:16:42.806607Z",
-        "current_zone": {
-          "x": 4,
-          "y": 4
-        },
-        "current_position": {
-          "x": 32,
-          "y": 32
-        },
-        "vision_radius": 2,
-        "torch_lit": false
-      },
-      "password_hash": "318579ff7d8fb584004ddeedd004dfed1b2d1982808fba808103241ec5b3aa74",
-      "salt": "8108e3191a7446d6"
     }
   }
 }

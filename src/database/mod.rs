@@ -230,7 +230,6 @@ impl CharacterDatabase {
                             if !needs_migration {
                                 println!("📦 Migrating inventory system for character: {}", name);
                             }
-                            needs_migration = true;
                             
                             // Get character strength for weight calculation
                             let strength = character.get("characteristics")

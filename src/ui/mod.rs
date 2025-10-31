@@ -1,5 +1,5 @@
 use crossterm::{
-    event::{self, Event, KeyEvent, KeyCode, KeyModifiers},
+    event::{self, Event, KeyEvent, KeyCode, KeyModifiers, EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
     cursor::{Hide, Show},
@@ -18,6 +18,7 @@ use crate::forge::{RolledCharacteristics, ForgeRace};
 pub mod framework;
 pub mod layout;
 pub mod components;
+pub mod mouse;
 
 pub type TerminalType = Terminal<CrosstermBackend<Stdout>>;
 
@@ -34,6 +35,7 @@ pub enum UIState {
     CharacterList(Vec<(String, chrono::DateTime<chrono::Utc>)>, Option<usize>), // characters, selected_index
     Playing,
     CharacterMenu,
+    CharacterSheet,
     InventoryManagement(InventoryState),
     EquipmentManagement(EquipmentState),
     WorldExploration(WorldExplorationState),
@@ -101,6 +103,38 @@ pub enum CombatPhase {
     ForgeCombatMinuteEnd,  // Check for combat end, advance to next minute
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum CombatPanel {
+    Battlefield,
+    Movement,
+    Combat,
+    Skills,
+    CharacterInfo,
+    TargetInfo,
+    SkillsAvailable,
+    Inventory,
+    SpellDetails,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum NavigationMode {
+    PanelNavigation, // Shift+HJKL - navigating between panels
+    WithinPanel,     // HJKL - navigating within active panel
+    Movement,        // WASD - moving player on battlefield
+}
+
+#[derive(Debug, Clone)]
+pub struct CombatPanelSelections {
+    pub movement_index: usize,
+    pub combat_index: usize,
+    pub skills_index: usize,
+    pub character_info_index: usize,
+    pub target_info_index: usize,
+    pub skills_available_index: usize,
+    pub inventory_index: usize,
+    pub spell_details_index: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct TacticalCombatState {
     pub battlefield: crate::forge::TacticalBattlefield,
@@ -121,6 +155,12 @@ pub struct TacticalCombatState {
     pub action_menu_open: bool,
     pub selected_action_index: usize,
     pub available_actions: Vec<String>,
+    pub inventory_menu_open: bool,
+    
+    // New panel-based navigation
+    pub active_panel: CombatPanel,
+    pub panel_selections: CombatPanelSelections,
+    pub navigation_mode: NavigationMode,
     
     // Spell selection state
     pub spell_menu_open: bool,
@@ -247,6 +287,20 @@ impl TacticalCombatState {
                 "End Turn".to_string(),
                 "Interact".to_string(),
             ],
+            inventory_menu_open: false,
+            
+            active_panel: CombatPanel::Battlefield,
+            panel_selections: CombatPanelSelections {
+                movement_index: 0,
+                combat_index: 0,
+                skills_index: 0,
+                character_info_index: 0,
+                target_info_index: 0,
+                skills_available_index: 0,
+                inventory_index: 0,
+                spell_details_index: 0,
+            },
+            navigation_mode: NavigationMode::WithinPanel,
             
             spell_menu_open: false,
             selected_spell_index: 0,
@@ -745,7 +799,7 @@ impl GameUI {
             })?;
         
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, Hide)
+        execute!(stdout, EnterAlternateScreen, Hide, EnableMouseCapture)
             .map_err(|e| anyhow::anyhow!("Failed to setup terminal screen: {}", e))?;
         
         let backend = CrosstermBackend::new(stdout);
@@ -761,7 +815,7 @@ impl GameUI {
 
     pub fn cleanup(&mut self) -> anyhow::Result<()> {
         terminal::disable_raw_mode()?;
-        execute!(self.terminal.backend_mut(), LeaveAlternateScreen, Show)?;
+        execute!(self.terminal.backend_mut(), LeaveAlternateScreen, Show, DisableMouseCapture)?;
         Ok(())
     }
 
@@ -778,6 +832,7 @@ impl GameUI {
                 UIState::CharacterList(character_list, selected_index) => Self::draw_character_list_static(f, Some(character_list), *selected_index),
                 UIState::Playing => Self::draw_game_static(f, character_clone.as_ref()),
                 UIState::CharacterMenu => Self::draw_character_menu_static(f, character_clone.as_ref()),
+                UIState::CharacterSheet => Self::draw_character_sheet_static(f, character_clone.as_ref()),
                 UIState::InventoryManagement(inventory_state) => Self::draw_inventory_static(f, inventory_state, character_clone.as_ref()),
                 UIState::EquipmentManagement(equipment_state) => Self::draw_equipment_static(f, equipment_state, character_clone.as_ref()),
                 UIState::WorldExploration(world_state) => Self::draw_world_exploration_static(f, world_state, character_clone.as_ref()),
@@ -798,8 +853,9 @@ impl GameUI {
 
     fn draw_welcome_static(f: &mut Frame) {
         let area = f.size();
-        
-        // Create beautiful ASCII art title
+        let theme = framework::UITheme::forge_theme();
+
+        // Create beautiful ASCII art title with enhanced styling
         let title_art = vec![
             "██╗    ██╗ █████╗ ██████╗ ██╗      ██████╗ ██████╗ ██████╗ ███████╗",
             "██║    ██║██╔══██╗██╔══██╗██║     ██╔═══██╗██╔══██╗██╔══██╗██╔════╝",
@@ -812,105 +868,302 @@ impl GameUI {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),
+                Constraint::Length(1),
+                Constraint::Length(10),
                 Constraint::Length(8),
-                Constraint::Length(6),
                 Constraint::Min(0),
-                Constraint::Length(3),
+                Constraint::Length(7),
             ])
             .split(area);
 
-        // Title
+        // Title with gradient effect and enhanced border
         let title_lines: Vec<Line> = title_art.iter()
-            .map(|line| Line::from(Span::styled(*line, Style::default().fg(Color::Yellow))))
+            .map(|line| Line::from(Span::styled(
+                *line,
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            )))
             .collect();
-        
+
         let title = Paragraph::new(title_lines)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)))
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default()
+                    .fg(theme.border_accent)
+                    .add_modifier(Modifier::BOLD))
+                .style(Style::default().bg(theme.background)))
             .alignment(Alignment::Center);
         f.render_widget(title, chunks[1]);
 
-        // Subtitle
-        let subtitle = Paragraph::new("A Forge: Out of Chaos Adventure")
-            .style(Style::default().fg(Color::Cyan))
+        // Subtitle with decorative elements
+        let subtitle_text = vec![
+            Line::from(vec![
+                Span::styled("═══════════════════════════════════════", Style::default().fg(theme.border_accent)),
+            ]),
+            Line::from(vec![
+                Span::styled("⚔ ", Style::default().fg(theme.primary)),
+                Span::styled("A Forge: Out of Chaos Adventure", Style::default()
+                    .fg(theme.info)
+                    .add_modifier(Modifier::BOLD | Modifier::ITALIC)),
+                Span::styled(" ⚔", Style::default().fg(theme.primary)),
+            ]),
+            Line::from(vec![
+                Span::styled("═══════════════════════════════════════", Style::default().fg(theme.border_accent)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Terminal RPG • Turn-Based Combat • Character Progression",
+                    Style::default().fg(theme.text_secondary)),
+            ]),
+        ];
+
+        let subtitle = Paragraph::new(subtitle_text)
+            .style(Style::default().bg(theme.background))
             .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Blue)));
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_primary)));
         f.render_widget(subtitle, chunks[2]);
 
-        // Story intro
+        // Story intro with enhanced styling
         let story = Paragraph::new(vec![
-            Line::from("From humble farm worker to mighty warlord,"),
-            Line::from("your destiny awaits in the realm of chaos!"),
+            Line::from(vec![
+                Span::styled("🌟 ", Style::default().fg(theme.warning)),
+                Span::styled("From humble farm worker to mighty warlord,",
+                    Style::default().fg(theme.text_primary)),
+            ]),
+            Line::from(vec![
+                Span::styled("   your destiny awaits in the realm of chaos!",
+                    Style::default().fg(theme.text_primary)),
+            ]),
             Line::from(""),
-            Line::from(Span::styled("Press any key to continue...", Style::default().fg(Color::Green))),
+            Line::from(vec![
+                Span::styled("🔥 ", Style::default().fg(theme.error)),
+                Span::styled("Master the Forge combat system", Style::default().fg(theme.text_secondary)),
+            ]),
+            Line::from(vec![
+                Span::styled("✨ ", Style::default().fg(theme.sp_color)),
+                Span::styled("Wield powerful magic and deadly weapons", Style::default().fg(theme.text_secondary)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("▶ Press any key to continue...",
+                Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD | Modifier::SLOW_BLINK))),
         ])
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Green)));
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.border_primary)));
         f.render_widget(story, chunks[4]);
     }
 
     fn draw_main_menu_static(f: &mut Frame, current_character: Option<&crate::forge::ForgeCharacter>) {
         let area = f.size();
-        
+        let theme = framework::UITheme::forge_theme();
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(5),
                 Constraint::Min(0),
-                Constraint::Length(3),
+                Constraint::Length(4),
             ])
             .split(area);
 
         // Title - show character info if logged in
-        let title_text = if let Some(character) = current_character {
-            format!("WARLORDS MAIN MENU - Playing as {}", character.name)
+        let title_content = if let Some(character) = current_character {
+            vec![
+                Line::from(vec![
+                    Span::styled("⚔ WARLORDS ", Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD)),
+                    Span::styled("MAIN MENU", Style::default()
+                        .fg(theme.primary)
+                        .add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Playing as: ", Style::default().fg(theme.text_secondary)),
+                    Span::styled(&character.name, Style::default()
+                        .fg(theme.text_highlight)
+                        .add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" | Level {} {}", character.level, character.race.name),
+                        Style::default().fg(theme.text_secondary)),
+                ]),
+            ]
         } else {
-            "WARLORDS MAIN MENU".to_string()
+            vec![
+                Line::from(vec![
+                    Span::styled("⚔ WARLORDS ", Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD)),
+                    Span::styled("MAIN MENU", Style::default()
+                        .fg(theme.primary)
+                        .add_modifier(Modifier::BOLD)),
+                ]),
+            ]
         };
-        let title = Paragraph::new(title_text)
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+
+        let title = Paragraph::new(title_content)
+            .style(Style::default().bg(theme.background))
             .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)));
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default()
+                    .fg(theme.border_accent)
+                    .add_modifier(Modifier::BOLD)));
         f.render_widget(title, chunks[0]);
 
         // Menu options - different based on whether character is logged in
         let menu_items = if current_character.is_some() {
             vec![
-                ListItem::new("1. Return to Game World"),
-                ListItem::new("2. Explore the World"),
-                ListItem::new("3. Character Menu"),
-                ListItem::new("4. Logout & Switch Character"),
-                ListItem::new("5. Quit"),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("1", Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)),
+                        Span::styled(" • Return to Game World", Style::default()
+                            .fg(theme.text_primary)),
+                    ]),
+                ]),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("2", Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)),
+                        Span::styled(" • Explore the World", Style::default()
+                            .fg(theme.text_primary)),
+                    ]),
+                ]),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("3", Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)),
+                        Span::styled(" • Character Menu", Style::default()
+                            .fg(theme.text_primary)),
+                    ]),
+                ]),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("4", Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)),
+                        Span::styled(" • Logout & Switch Character", Style::default()
+                            .fg(theme.text_primary)),
+                    ]),
+                ]),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("5", Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)),
+                        Span::styled(" • Quit", Style::default()
+                            .fg(theme.error)),
+                    ]),
+                ]),
                 ListItem::new(""),
-                ListItem::new(Span::styled("Select an option (1-5):", Style::default().fg(Color::Green))),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("▶ ", Style::default().fg(theme.success)),
+                        Span::styled("Select an option (1-5):", Style::default()
+                            .fg(theme.success)
+                            .add_modifier(Modifier::BOLD)),
+                    ]),
+                ]),
             ]
         } else {
             vec![
-                ListItem::new("1. Login to Existing Character"),
-                ListItem::new("2. Create New Character"),
-                ListItem::new("3. List Characters"),
-                ListItem::new("4. Quit"),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("1", Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)),
+                        Span::styled(" • Login to Existing Character", Style::default()
+                            .fg(theme.text_primary)),
+                    ]),
+                ]),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("2", Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)),
+                        Span::styled(" • Create New Character", Style::default()
+                            .fg(theme.text_primary)),
+                    ]),
+                ]),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("3", Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)),
+                        Span::styled(" • List Characters", Style::default()
+                            .fg(theme.text_primary)),
+                    ]),
+                ]),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("4", Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD)),
+                        Span::styled(" • Quit", Style::default()
+                            .fg(theme.error)),
+                    ]),
+                ]),
                 ListItem::new(""),
-                ListItem::new(Span::styled("Select an option (1-4):", Style::default().fg(Color::Green))),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("▶ ", Style::default().fg(theme.success)),
+                        Span::styled("Select an option (1-4):", Style::default()
+                            .fg(theme.success)
+                            .add_modifier(Modifier::BOLD)),
+                    ]),
+                ]),
             ]
         };
 
         let menu = List::new(menu_items)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::White)))
-            .style(Style::default().fg(Color::White));
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_primary)))
+            .style(Style::default().bg(theme.background));
         f.render_widget(menu, chunks[1]);
 
-        // Instructions
+        // Instructions with icons
         let instructions = if current_character.is_some() {
-            Paragraph::new("Enter your choice and press ENTER | M: Back to Game | Q/Ctrl+C: Quit")
+            vec![
+                Line::from(vec![
+                    Span::styled("⌨ ", Style::default().fg(theme.info)),
+                    Span::styled("Enter your choice and press ENTER  ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("│ ", Style::default().fg(theme.border_secondary)),
+                    Span::styled(" M", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Back to Game  ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("│ ", Style::default().fg(theme.border_secondary)),
+                    Span::styled(" Q/Ctrl+C", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Quit", Style::default().fg(theme.text_secondary)),
+                ]),
+            ]
         } else {
-            Paragraph::new("Enter your choice and press ENTER | Q/Ctrl+C: Quit")
+            vec![
+                Line::from(vec![
+                    Span::styled("⌨ ", Style::default().fg(theme.info)),
+                    Span::styled("Enter your choice and press ENTER  ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("│ ", Style::default().fg(theme.border_secondary)),
+                    Span::styled(" Q/Ctrl+C", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Quit", Style::default().fg(theme.text_secondary)),
+                ]),
+            ]
         };
-        let instructions = instructions
-            .style(Style::default().fg(Color::DarkGray))
+
+        let instructions_widget = Paragraph::new(instructions)
+            .style(Style::default().bg(theme.background))
             .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)));
-        f.render_widget(instructions, chunks[2]);
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_secondary)));
+        f.render_widget(instructions_widget, chunks[2]);
     }
 
     fn draw_character_login_static(f: &mut Frame, input_buffer: &str) {
@@ -1610,7 +1863,7 @@ impl GameUI {
 
         // Instructions
         let instructions = if character_list.is_some() && !character_list.unwrap().is_empty() {
-            Paragraph::new("↑/↓ W/S: Navigate | ENTER: Play Character | ESC: Main Menu | Q/Ctrl+C: Quit")
+            Paragraph::new("↑↓/WS/JK: Navigate | ENTER: Play Character | ESC: Main Menu | Q/Ctrl+C: Quit")
         } else {
             Paragraph::new("Any Key: Return to Main Menu | Q/Ctrl+C: Quit Game")
         };
@@ -1876,7 +2129,7 @@ impl GameUI {
             f.render_widget(combat_panel, right_chunks[1]);
 
             // Controls
-            let controls = Paragraph::new("I: Inventory | E: Equipment | ESC/M: Return to Game | Q/Ctrl+C: Quit")
+            let controls = Paragraph::new("I: Inventory | E: Equipment | C: Character Sheet | ESC/M: Return to Game | Q/Ctrl+C: Quit")
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL).title("Controls").border_style(Style::default().fg(Color::DarkGray)));
@@ -1886,6 +2139,155 @@ impl GameUI {
                 .style(Style::default().fg(Color::Red))
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL).title("Character Menu").border_style(Style::default().fg(Color::Red)));
+            f.render_widget(no_char, area);
+        }
+    }
+
+    fn draw_character_sheet_static(f: &mut Frame, current_character: Option<&crate::forge::ForgeCharacter>) {
+        let area = f.size();
+        let theme = framework::UITheme::forge_theme();
+
+        if let Some(character) = current_character {
+            // Main layout: character sheet sections
+            let main_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(5),   // Title
+                    Constraint::Min(0),      // Sheet content
+                    Constraint::Length(4),   // Controls
+                ])
+                .split(area);
+
+            // Enhanced title with character info
+            let title_content = vec![
+                Line::from(vec![
+                    Span::styled("📋 ", Style::default().fg(theme.info)),
+                    Span::styled("CHARACTER SHEET", Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(&character.name, Style::default()
+                        .fg(theme.text_highlight)
+                        .add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" • Level {} {}", character.level, character.race.name),
+                        Style::default().fg(theme.text_secondary)),
+                ]),
+            ];
+
+            let title = Paragraph::new(title_content)
+                .style(Style::default().bg(theme.background))
+                .alignment(Alignment::Center)
+                .block(Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default()
+                        .fg(theme.border_accent)
+                        .add_modifier(Modifier::BOLD)));
+            f.render_widget(title, main_chunks[0]);
+
+            // Main sheet layout: 3 columns
+            let sheet_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(33), // Left: Basic info, characteristics
+                    Constraint::Percentage(34), // Middle: Combat, skills, magic
+                    Constraint::Percentage(33), // Right: Equipment, inventory
+                ])
+                .split(main_chunks[1]);
+
+            // Left column layout
+            let left_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(12), // Basic character info
+                    Constraint::Length(12), // Characteristics
+                    Constraint::Min(0),     // Race info & special abilities
+                ])
+                .split(sheet_chunks[0]);
+
+            // Middle column layout
+            let middle_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(8),  // Combat stats
+                    Constraint::Length(8),  // Derived values
+                    Constraint::Length(10), // Skills
+                    Constraint::Min(0),     // Magic
+                ])
+                .split(sheet_chunks[1]);
+
+            // Right column layout
+            let right_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(12), // Equipment
+                    Constraint::Length(8),  // Encumbrance & movement
+                    Constraint::Min(0),     // Inventory
+                ])
+                .split(sheet_chunks[2]);
+
+            // Draw Basic Character Information
+            Self::draw_basic_info_panel(f, left_chunks[0], character);
+            
+            // Draw Characteristics
+            Self::draw_characteristics_panel(f, left_chunks[1], character);
+            
+            // Draw Race & Special Abilities
+            Self::draw_race_abilities_panel(f, left_chunks[2], character);
+            
+            // Draw Combat Statistics
+            Self::draw_combat_stats_panel(f, middle_chunks[0], character);
+            
+            // Draw Derived Values
+            Self::draw_derived_values_panel(f, middle_chunks[1], character);
+            
+            // Draw Skills
+            Self::draw_character_skills_panel(f, middle_chunks[2], character);
+            
+            // Draw Magic
+            Self::draw_magic_panel(f, middle_chunks[3], character);
+            
+            // Draw Equipment
+            Self::draw_equipment_sheet_panel(f, right_chunks[0], character);
+            
+            // Draw Movement & Encumbrance
+            Self::draw_movement_encumbrance_panel(f, right_chunks[1], character);
+            
+            // Draw Inventory
+            Self::draw_inventory_sheet_panel(f, right_chunks[2], character);
+
+            // Enhanced controls
+            let controls = vec![
+                Line::from(vec![
+                    Span::styled("⌨ ", Style::default().fg(theme.info)),
+                    Span::styled("ESC/M", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Menu  ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("│ ", Style::default().fg(theme.border_secondary)),
+                    Span::styled(" I", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Inventory  ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("│ ", Style::default().fg(theme.border_secondary)),
+                    Span::styled(" E", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Equipment  ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("│ ", Style::default().fg(theme.border_secondary)),
+                    Span::styled(" Q", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Quit", Style::default().fg(theme.text_secondary)),
+                ]),
+            ];
+
+            let controls_widget = Paragraph::new(controls)
+                .style(Style::default().bg(theme.background))
+                .alignment(Alignment::Center)
+                .block(Block::default()
+                    .borders(Borders::ALL)
+                    .title("Controls")
+                    .border_style(Style::default().fg(theme.border_secondary)));
+            f.render_widget(controls_widget, main_chunks[2]);
+        } else {
+            let no_char = Paragraph::new("No character loaded.")
+                .style(Style::default().fg(Color::Red))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title("Character Sheet").border_style(Style::default().fg(Color::Red)));
             f.render_widget(no_char, area);
         }
     }
@@ -2069,8 +2471,8 @@ impl GameUI {
         
         // Controls
         let controls_text = vec![
-            Line::from("WASD/Arrow Keys: Move | M: Menu | F: Fight | Q: Quit | H: Help"),
-            Line::from("L: Look | E: Enter/Examine | P: POIs | T: Talk | R: Search | I: Interact | C: Camp | G: Gather"),
+            Line::from("↑↓←→/WASD/HJKL: Move | M: Menu | F: Fight | Shift-L: Light | Q: Quit"),
+            Line::from("E: Enter/Examine | P: POIs | T: Talk | R: Search | I: Interact | C: Camp | G: Gather"),
         ];
         let controls = Paragraph::new(controls_text)
             .style(Style::default().fg(Color::DarkGray))
@@ -2083,9 +2485,9 @@ impl GameUI {
         let mut world_content = vec![];
         
         if let Some(zone_data) = &world_state.zone_data {
-            // Use available space for dynamic viewport sizing - make viewport larger for continuous world feel
-            let actual_view_height = (view_height * 3 / 2).max(20); // Increase by 50%
-            let actual_view_width = (view_width * 3 / 2).max(40);   // Increase by 50%
+            // Use full available space for viewport - fill entire world view area
+            let actual_view_height = view_height.max(20); // Use full available height
+            let actual_view_width = view_width.max(40);   // Use full available width
             
             let half_width = actual_view_width / 2;
             let half_height = actual_view_height / 2;
@@ -2395,8 +2797,8 @@ impl GameUI {
         
         // Check if tactical combat is active
         if let Some(ref tactical_combat) = dungeon_state.active_tactical_combat {
-            // Render integrated tactical combat view
-            Self::draw_integrated_tactical_combat(f, area, dungeon_state, tactical_combat, current_character);
+            // Use the new centered battlefield UI for tactical combat
+            Self::draw_tactical_combat_static(f, tactical_combat);
             return;
         }
         
@@ -2453,7 +2855,7 @@ impl GameUI {
         f.render_widget(dungeon, left_chunks[1]);
 
         // Controls at bottom
-        let controls = Paragraph::new("WASD/Arrows: Move | (E)xamine | (I)nteract | (F)ight | (U)se stairs | (L)ook | (X)it dungeon | Ctrl+Q: Quit")
+        let controls = Paragraph::new("↑↓←→/WASD/HJKL: Move | E: Examine | I: Interact | F: Fight | U: Stairs | Shift-L: Light | X: Exit | Ctrl+Q: Quit")
             .style(Style::default().fg(Color::Green))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Green)));
@@ -2978,15 +3380,18 @@ impl GameUI {
         f.render_widget(controls, chunks[4]);
     }
 
-    pub fn handle_input(&self) -> anyhow::Result<Option<KeyEvent>> {
+    pub fn handle_input(&self) -> anyhow::Result<Option<Event>> {
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
                     // Handle Ctrl+C for graceful shutdown
                     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-                        return Ok(Some(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)));
+                        return Ok(Some(Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL))));
                     }
-                    return Ok(Some(key));
+                    return Ok(Some(Event::Key(key)));
+                }
+                Event::Mouse(mouse) => {
+                    return Ok(Some(Event::Mouse(mouse)));
                 }
                 _ => {}
             }
@@ -3025,24 +3430,46 @@ impl GameUI {
                 ])
                 .split(main_chunks[1]);
 
-            // Title with sort/filter info
-            let sort_text = match inventory_state.sort_mode {
-                InventorySortMode::Name => "Name",
-                InventorySortMode::Type => "Type", 
-                InventorySortMode::Weight => "Weight",
-                InventorySortMode::Value => "Value",
-                InventorySortMode::Quantity => "Quantity",
+            // Enhanced title with sort/filter info
+            let theme = framework::UITheme::forge_theme();
+
+            let (sort_text, sort_icon) = match inventory_state.sort_mode {
+                InventorySortMode::Name => ("Name", "📝"),
+                InventorySortMode::Type => ("Type", "📦"),
+                InventorySortMode::Weight => ("Weight", "⚖"),
+                InventorySortMode::Value => ("Value", "🪙"),
+                InventorySortMode::Quantity => ("Quantity", "🔢"),
             };
-            
+
             let filter_text = match &inventory_state.filter_type {
                 Some(_) => " (Filtered)",
                 None => "",
             };
-            
-            let title = Paragraph::new(format!("Inventory - Sort: {}{}", sort_text, filter_text))
-                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+
+            let title_content = vec![
+                Line::from(vec![
+                    Span::styled("📦 ", Style::default().fg(theme.info)),
+                    Span::styled("INVENTORY", Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled(format!("{} Sort: ", sort_icon), Style::default().fg(theme.text_secondary)),
+                    Span::styled(sort_text, Style::default()
+                        .fg(theme.text_highlight)
+                        .add_modifier(Modifier::BOLD)),
+                    Span::styled(filter_text, Style::default().fg(theme.warning)),
+                ]),
+            ];
+
+            let title = Paragraph::new(title_content)
+                .style(Style::default().bg(theme.background))
                 .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)));
+                .block(Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default()
+                        .fg(theme.border_accent)
+                        .add_modifier(Modifier::BOLD)));
             f.render_widget(title, left_chunks[0]);
 
             // Item list - create sorted version based on current sort mode
@@ -3097,60 +3524,122 @@ impl GameUI {
             }
             
             let mut item_lines = Vec::new();
-            
+
             for (display_index, (_original_index, item)) in sorted_items.iter().enumerate() {
                 let selected = display_index == inventory_state.selected_index;
-                let style = if selected {
-                    Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
+
+                // Get icon and color based on item type
+                let (icon, type_color) = match &item.item_type {
+                    crate::forge::ItemType::Weapon(_) => ("⚔", theme.primary),
+                    crate::forge::ItemType::Armor(_) => ("🛡", theme.info),
+                    crate::forge::ItemType::Accessory(_) => ("💍", theme.sp_color),
+                    crate::forge::ItemType::Consumable(_) => ("🧪", theme.success),
+                    crate::forge::ItemType::Material(_) => ("🔧", theme.text_secondary),
+                    crate::forge::ItemType::Misc(_) => ("📦", theme.text_muted),
                 };
-                
+
                 let quantity_text = if item.quantity > 1 {
-                    format!(" ({})", item.quantity)
+                    format!(" ×{}", item.quantity)
                 } else {
                     String::new()
                 };
-                
-                let weight_text = format!(" [{:.1}kg]", item.weight * item.quantity as f32);
-                let value_text = format!(" {}gp", item.value * item.quantity);
-                
-                let line_text = format!("{}{}{} {}", 
-                    item.name, 
-                    quantity_text,
-                    weight_text,
-                    value_text
-                );
-                
-                item_lines.push(ListItem::new(line_text).style(style));
+
+                let weight_text = format!(" ⚖{:.1}", item.weight * item.quantity as f32);
+                let value_text = format!(" 🪙{}", item.value * item.quantity);
+
+                if selected {
+                    item_lines.push(ListItem::new(vec![
+                        Line::from(vec![
+                            Span::styled(format!("{} ", icon), Style::default()
+                                .fg(type_color)
+                                .bg(theme.secondary)
+                                .add_modifier(Modifier::BOLD)),
+                            Span::styled(&item.name, Style::default()
+                                .fg(theme.text_highlight)
+                                .bg(theme.secondary)
+                                .add_modifier(Modifier::BOLD)),
+                            Span::styled(quantity_text, Style::default()
+                                .fg(theme.accent)
+                                .bg(theme.secondary)),
+                            Span::styled(weight_text, Style::default()
+                                .fg(theme.text_secondary)
+                                .bg(theme.secondary)),
+                            Span::styled(value_text, Style::default()
+                                .fg(theme.warning)
+                                .bg(theme.secondary)),
+                        ]),
+                    ]));
+                } else {
+                    item_lines.push(ListItem::new(vec![
+                        Line::from(vec![
+                            Span::styled(format!("{} ", icon), Style::default().fg(type_color)),
+                            Span::styled(&item.name, Style::default().fg(theme.text_primary)),
+                            Span::styled(quantity_text, Style::default().fg(theme.text_secondary)),
+                            Span::styled(weight_text, Style::default().fg(theme.text_muted)),
+                            Span::styled(value_text, Style::default().fg(theme.warning)),
+                        ]),
+                    ]));
+                }
             }
-            
+
             if sorted_items.is_empty() {
-                item_lines.push(ListItem::new("No items in inventory").style(Style::default().fg(Color::DarkGray)));
+                item_lines.push(ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("📭 ", Style::default().fg(theme.text_muted)),
+                        Span::styled("No items in inventory", Style::default().fg(theme.text_muted)),
+                    ]),
+                ]));
             }
-            
+
             let item_list = List::new(item_lines)
-                .block(Block::default().borders(Borders::ALL).title("Items").border_style(Style::default().fg(Color::Green)))
-                .highlight_style(Style::default().bg(Color::DarkGray));
+                .block(Block::default()
+                    .borders(Borders::ALL)
+                    .title("Items")
+                    .border_style(Style::default().fg(theme.border_primary)))
+                .style(Style::default().bg(theme.background));
             f.render_widget(item_list, left_chunks[1]);
 
-            // Weight capacity info
+            // Enhanced weight capacity info with progress bar
             let current_weight: f32 = character.inventory.items.iter().map(|item| item.weight * item.quantity as f32).sum();
             let max_weight = character.inventory.max_weight;
             let weight_percentage = (current_weight / max_weight * 100.0) as u8;
-            
+
             let weight_color = match weight_percentage {
-                0..=70 => Color::Green,
-                71..=90 => Color::Yellow,
-                _ => Color::Red,
+                0..=70 => theme.success,
+                71..=90 => theme.warning,
+                _ => theme.error,
             };
-            
+
+            let total_value: u32 = character.inventory.items.iter().map(|item| item.value * item.quantity).sum();
+
+            let weight_bar_width = left_chunks[2].width.saturating_sub(6).min(30) as usize;
+            let weight_bar = framework::art::progress_bar(
+                current_weight as u32,
+                max_weight as u32,
+                weight_bar_width,
+                '█',
+                '░'
+            );
+
             let weight_info = vec![
-                Line::from(format!("Weight: {:.1}/{:.1} kg ({}%)", current_weight, max_weight, weight_percentage)),
-                Line::from(""),
-                Line::from(format!("Total Items: {} | Total Value: {}gp", 
-                    character.inventory.items.len(), 
-                    character.inventory.items.iter().map(|item| item.value * item.quantity).sum::<u32>())),
+                Line::from(vec![
+                    Span::styled("⚖ ", Style::default().fg(weight_color)),
+                    Span::styled(format!("{:.1}/{:.1} kg", current_weight, max_weight),
+                        Style::default().fg(weight_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" ({}%)", weight_percentage),
+                        Style::default().fg(theme.text_secondary)),
+                ]),
+                Line::from(vec![
+                    Span::styled(weight_bar, Style::default().fg(weight_color)),
+                ]),
+                Line::from(vec![
+                    Span::styled("📦 ", Style::default().fg(theme.info)),
+                    Span::styled(format!("{} items", character.inventory.items.len()),
+                        Style::default().fg(theme.text_primary)),
+                    Span::styled("  🪙 ", Style::default().fg(theme.warning)),
+                    Span::styled(format!("{}gp", total_value),
+                        Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)),
+                ]),
             ];
             
             let weight_panel = Paragraph::new(weight_info)
@@ -3158,24 +3647,49 @@ impl GameUI {
                 .block(Block::default().borders(Borders::ALL).title("Capacity").border_style(Style::default().fg(weight_color)));
             f.render_widget(weight_panel, left_chunks[2]);
 
-            // Equipment status
+            // Equipment status with icons
             let equipped_items = vec![
-                Line::from(Span::styled("Current Equipment", Style::default().add_modifier(Modifier::BOLD))),
+                framework::art::section_header("EQUIPPED", right_chunks[0].width.saturating_sub(4) as usize, &theme),
                 Line::from(""),
-                Line::from(format!("Weapon: {}", 
-                    character.equipment.weapon.as_ref().map(|w| w.name.as_str()).unwrap_or("None"))),
-                Line::from(format!("Armor: {}", 
-                    character.equipment.armor.as_ref().map(|a| a.name.as_str()).unwrap_or("None"))),
-                Line::from(format!("Shield: {}", 
-                    character.equipment.shield.as_ref().map(|s| s.name.as_str()).unwrap_or("None"))),
-                Line::from(format!("Accessory 1: {}", 
-                    character.equipment.accessory1.as_ref().map(|a| a.name.as_str()).unwrap_or("None"))),
-                Line::from(format!("Accessory 2: {}", 
-                    character.equipment.accessory2.as_ref().map(|a| a.name.as_str()).unwrap_or("None"))),
+                Line::from(vec![
+                    Span::styled("⚔ ", Style::default().fg(theme.primary)),
+                    Span::styled(
+                        character.equipment.weapon.as_ref().map(|w| w.name.as_str()).unwrap_or("Empty"),
+                        if character.equipment.weapon.is_some() { Style::default().fg(theme.success) } else { Style::default().fg(theme.text_muted) }
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("🛡 ", Style::default().fg(theme.info)),
+                    Span::styled(
+                        character.equipment.armor.as_ref().map(|a| a.name.as_str()).unwrap_or("Empty"),
+                        if character.equipment.armor.is_some() { Style::default().fg(theme.success) } else { Style::default().fg(theme.text_muted) }
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("🔰 ", Style::default().fg(theme.info)),
+                    Span::styled(
+                        character.equipment.shield.as_ref().map(|s| s.name.as_str()).unwrap_or("Empty"),
+                        if character.equipment.shield.is_some() { Style::default().fg(theme.success) } else { Style::default().fg(theme.text_muted) }
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("💍 ", Style::default().fg(Color::Magenta)),
+                    Span::styled(
+                        character.equipment.accessory1.as_ref().map(|a| a.name.as_str()).unwrap_or("Empty"),
+                        if character.equipment.accessory1.is_some() { Style::default().fg(theme.success) } else { Style::default().fg(theme.text_muted) }
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("💍 ", Style::default().fg(Color::Magenta)),
+                    Span::styled(
+                        character.equipment.accessory2.as_ref().map(|a| a.name.as_str()).unwrap_or("Empty"),
+                        if character.equipment.accessory2.is_some() { Style::default().fg(theme.success) } else { Style::default().fg(theme.text_muted) }
+                    ),
+                ]),
             ];
-            
+
             let equipment_panel = Paragraph::new(equipped_items)
-                .block(Block::default().borders(Borders::ALL).title("Equipment").border_style(Style::default().fg(Color::Cyan)));
+                .block(Block::default().borders(Borders::ALL).title("⚡ Equipment").border_style(Style::default().fg(theme.accent)));
             f.render_widget(equipment_panel, right_chunks[0]);
 
             // Item details - get selected item from sorted view
@@ -3208,7 +3722,7 @@ impl GameUI {
             f.render_widget(details_panel, right_chunks[1]);
 
             // Controls
-            let controls = Paragraph::new("↑↓/JK: Navigate | ENTER: Use/Equip | D: Drop | TAB: Sort | F: Filter | ESC: Back")
+            let controls = Paragraph::new("↑↓/WS/JK: Navigate | ENTER: Use/Equip | D: Drop | TAB: Sort | F: Filter | ESC: Back")
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL).title("Controls").border_style(Style::default().fg(Color::DarkGray)));
@@ -3247,99 +3761,257 @@ impl GameUI {
                 .split(main_chunks[0]);
 
             // Title
-            let title = Paragraph::new("Equipment Management")
-                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            let theme = framework::UITheme::forge_theme();
+            let title_content = vec![
+                Line::from(vec![
+                    Span::styled("⚔ ", Style::default().fg(theme.primary)),
+                    Span::styled("EQUIPMENT MANAGEMENT", Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                    Span::styled(" 🛡", Style::default().fg(theme.info)),
+                ]),
+                Line::from(vec![
+                    Span::styled(&character.name, Style::default().fg(theme.text_highlight)),
+                    Span::styled(format!(" • Level {} {}", character.level, character.race.name), Style::default().fg(theme.text_secondary)),
+                ]),
+            ];
+            let title = Paragraph::new(title_content)
                 .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Yellow)));
+                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.primary)));
             f.render_widget(title, left_chunks[0]);
 
-            // Equipment slots
+            // Equipment slots with icons and color-coding
             let mut slot_lines = Vec::new();
-            
-            let slots = [
-                ("Weapon", matches!(equipment_state.selected_slot, EquipmentSlot::Weapon)),
-                ("Armor", matches!(equipment_state.selected_slot, EquipmentSlot::Armor)), 
-                ("Shield", matches!(equipment_state.selected_slot, EquipmentSlot::Shield)),
-                ("Accessory 1", matches!(equipment_state.selected_slot, EquipmentSlot::Accessory1)),
-                ("Accessory 2", matches!(equipment_state.selected_slot, EquipmentSlot::Accessory2)),
-            ];
-            
-            for (slot_name, selected) in slots {
-                let style = if selected {
-                    Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                
-                let item_name = match slot_name {
-                    "Weapon" => character.equipment.weapon.as_ref().map(|w| w.name.as_str()).unwrap_or("None"),
-                    "Armor" => character.equipment.armor.as_ref().map(|a| a.name.as_str()).unwrap_or("None"),
-                    "Shield" => character.equipment.shield.as_ref().map(|s| s.name.as_str()).unwrap_or("None"),
-                    "Accessory 1" => character.equipment.accessory1.as_ref().map(|a| a.name.as_str()).unwrap_or("None"),
-                    "Accessory 2" => character.equipment.accessory2.as_ref().map(|a| a.name.as_str()).unwrap_or("None"),
-                    _ => "None",
-                };
-                
-                slot_lines.push(ListItem::new(format!("{}: {}", slot_name, item_name)).style(style));
-            }
-            
+
+            // Weapon slot
+            let weapon_selected = matches!(equipment_state.selected_slot, EquipmentSlot::Weapon);
+            let weapon_name = character.equipment.weapon.as_ref().map(|w| w.name.as_str()).unwrap_or("Empty");
+            let weapon_color = if character.equipment.weapon.is_some() { theme.success } else { theme.text_muted };
+            let line = if weapon_selected {
+                Line::from(vec![
+                    Span::styled("⚔ ", Style::default().fg(theme.primary).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled("Weapon: ", Style::default().fg(theme.text_primary).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled(weapon_name, Style::default().fg(weapon_color).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("⚔ ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("Weapon: ", Style::default().fg(theme.text_primary)),
+                    Span::styled(weapon_name, Style::default().fg(weapon_color)),
+                ])
+            };
+            slot_lines.push(ListItem::new(line));
+
+            // Armor slot
+            let armor_selected = matches!(equipment_state.selected_slot, EquipmentSlot::Armor);
+            let armor_name = character.equipment.armor.as_ref().map(|a| a.name.as_str()).unwrap_or("Empty");
+            let armor_color = if character.equipment.armor.is_some() { theme.success } else { theme.text_muted };
+            let line = if armor_selected {
+                Line::from(vec![
+                    Span::styled("🛡 ", Style::default().fg(theme.primary).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled("Armor: ", Style::default().fg(theme.text_primary).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled(armor_name, Style::default().fg(armor_color).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("🛡 ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("Armor: ", Style::default().fg(theme.text_primary)),
+                    Span::styled(armor_name, Style::default().fg(armor_color)),
+                ])
+            };
+            slot_lines.push(ListItem::new(line));
+
+            // Shield slot
+            let shield_selected = matches!(equipment_state.selected_slot, EquipmentSlot::Shield);
+            let shield_name = character.equipment.shield.as_ref().map(|s| s.name.as_str()).unwrap_or("Empty");
+            let shield_color = if character.equipment.shield.is_some() { theme.success } else { theme.text_muted };
+            let line = if shield_selected {
+                Line::from(vec![
+                    Span::styled("🔰 ", Style::default().fg(theme.primary).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled("Shield: ", Style::default().fg(theme.text_primary).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled(shield_name, Style::default().fg(shield_color).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("🔰 ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("Shield: ", Style::default().fg(theme.text_primary)),
+                    Span::styled(shield_name, Style::default().fg(shield_color)),
+                ])
+            };
+            slot_lines.push(ListItem::new(line));
+
+            // Accessory 1 slot
+            let acc1_selected = matches!(equipment_state.selected_slot, EquipmentSlot::Accessory1);
+            let acc1_name = character.equipment.accessory1.as_ref().map(|a| a.name.as_str()).unwrap_or("Empty");
+            let acc1_color = if character.equipment.accessory1.is_some() { theme.success } else { theme.text_muted };
+            let line = if acc1_selected {
+                Line::from(vec![
+                    Span::styled("💍 ", Style::default().fg(theme.primary).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled("Accessory 1: ", Style::default().fg(theme.text_primary).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled(acc1_name, Style::default().fg(acc1_color).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("💍 ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("Accessory 1: ", Style::default().fg(theme.text_primary)),
+                    Span::styled(acc1_name, Style::default().fg(acc1_color)),
+                ])
+            };
+            slot_lines.push(ListItem::new(line));
+
+            // Accessory 2 slot
+            let acc2_selected = matches!(equipment_state.selected_slot, EquipmentSlot::Accessory2);
+            let acc2_name = character.equipment.accessory2.as_ref().map(|a| a.name.as_str()).unwrap_or("Empty");
+            let acc2_color = if character.equipment.accessory2.is_some() { theme.success } else { theme.text_muted };
+            let line = if acc2_selected {
+                Line::from(vec![
+                    Span::styled("💍 ", Style::default().fg(theme.primary).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled("Accessory 2: ", Style::default().fg(theme.text_primary).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    Span::styled(acc2_name, Style::default().fg(acc2_color).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("💍 ", Style::default().fg(theme.text_secondary)),
+                    Span::styled("Accessory 2: ", Style::default().fg(theme.text_primary)),
+                    Span::styled(acc2_name, Style::default().fg(acc2_color)),
+                ])
+            };
+            slot_lines.push(ListItem::new(line));
+
             let slot_list = List::new(slot_lines)
-                .block(Block::default().borders(Borders::ALL).title("Equipment Slots").border_style(Style::default().fg(Color::Green)));
+                .block(Block::default().borders(Borders::ALL).title("⚡ Equipment Slots").border_style(Style::default().fg(theme.accent)));
             f.render_widget(slot_list, left_chunks[1]);
 
-            // Available items for selected slot
+            // Available items for selected slot with icons and colors
             let mut available_lines = Vec::new();
-            
+
             for (i, item) in equipment_state.available_items.iter().enumerate() {
                 let selected = i == equipment_state.selected_item_index;
-                let style = if selected {
-                    Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
+
+                let (icon, type_color) = match &item.item_type {
+                    crate::forge::ItemType::Weapon(_) => ("⚔", theme.primary),
+                    crate::forge::ItemType::Armor(_) => ("🛡", theme.info),
+                    crate::forge::ItemType::Accessory(_) => ("💍", Color::Magenta),
+                    _ => ("📦", theme.text_secondary),
                 };
-                
-                available_lines.push(ListItem::new(item.name.as_str()).style(style));
+
+                let line = if selected {
+                    Line::from(vec![
+                        Span::styled(format!("{} ", icon), Style::default().fg(type_color).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                        Span::styled(&item.name, Style::default().fg(theme.text_highlight).bg(theme.secondary).add_modifier(Modifier::BOLD)),
+                    ])
+                } else {
+                    Line::from(vec![
+                        Span::styled(format!("{} ", icon), Style::default().fg(type_color)),
+                        Span::styled(&item.name, Style::default().fg(theme.text_primary)),
+                    ])
+                };
+
+                available_lines.push(ListItem::new(line));
             }
-            
+
             if equipment_state.available_items.is_empty() {
-                available_lines.push(ListItem::new("No compatible items").style(Style::default().fg(Color::DarkGray)));
+                available_lines.push(ListItem::new(
+                    Line::from(vec![
+                        Span::styled("📭 ", Style::default().fg(theme.text_muted)),
+                        Span::styled("No compatible items in inventory", Style::default().fg(theme.text_muted)),
+                    ])
+                ));
             }
-            
-            let slot_name = match equipment_state.selected_slot {
-                EquipmentSlot::Weapon => "Weapons",
-                EquipmentSlot::Armor => "Armor",
-                EquipmentSlot::Shield => "Shields", 
-                EquipmentSlot::Accessory1 | EquipmentSlot::Accessory2 => "Accessories",
+
+            let (slot_name, slot_icon) = match equipment_state.selected_slot {
+                EquipmentSlot::Weapon => ("Weapons", "⚔"),
+                EquipmentSlot::Armor => ("Armor", "🛡"),
+                EquipmentSlot::Shield => ("Shields", "🔰"),
+                EquipmentSlot::Accessory1 | EquipmentSlot::Accessory2 => ("Accessories", "💍"),
             };
-            
+
             let available_list = List::new(available_lines)
-                .block(Block::default().borders(Borders::ALL).title(format!("Available {}", slot_name)).border_style(Style::default().fg(Color::Cyan)));
+                .block(Block::default().borders(Borders::ALL).title(format!("{} Available {}", slot_icon, slot_name)).border_style(Style::default().fg(theme.info)));
             f.render_widget(available_list, main_chunks[1]);
 
-            // Item details
+            // Item details with enhanced visuals
             let details = if let Some(selected_item) = equipment_state.available_items.get(equipment_state.selected_item_index) {
-                vec![
-                    Line::from(Span::styled(&selected_item.name, Style::default().add_modifier(Modifier::BOLD))),
+                let divider_str = framework::art::divider(main_chunks[2].width.saturating_sub(4) as usize, framework::art::DividerStyle::Single);
+                let mut detail_lines = vec![
+                    Line::from(Span::styled(&selected_item.name, Style::default().fg(theme.text_highlight).add_modifier(Modifier::BOLD))),
+                    Line::from(Span::styled(divider_str, Style::default().fg(theme.border_secondary))),
                     Line::from(""),
-                    Line::from(selected_item.description.as_str()),
+                    Line::from(Span::styled(selected_item.description.as_str(), Style::default().fg(theme.text_primary))),
                     Line::from(""),
-                    Line::from(format!("Weight: {:.1} kg", selected_item.weight)),
-                    Line::from(format!("Value: {} gp", selected_item.value)),
-                ]
+                ];
+
+                // Add item type-specific stats
+                match &selected_item.item_type {
+                    crate::forge::ItemType::Weapon(weapon_data) => {
+                        detail_lines.push(Line::from(vec![
+                            Span::styled("⚔ ", Style::default().fg(theme.primary)),
+                            Span::styled("Weapon Stats", Style::default().fg(theme.text_secondary).add_modifier(Modifier::BOLD)),
+                        ]));
+                        detail_lines.push(Line::from(vec![
+                            Span::styled("  Damage: ", Style::default().fg(theme.text_secondary)),
+                            Span::styled(weapon_data.damage_dice.clone(), Style::default().fg(theme.error)),
+                        ]));
+                        detail_lines.push(Line::from(""));
+                    },
+                    crate::forge::ItemType::Armor(armor_data) => {
+                        detail_lines.push(Line::from(vec![
+                            Span::styled("🛡 ", Style::default().fg(theme.info)),
+                            Span::styled("Armor Stats", Style::default().fg(theme.text_secondary).add_modifier(Modifier::BOLD)),
+                        ]));
+                        detail_lines.push(Line::from(vec![
+                            Span::styled("  AR: ", Style::default().fg(theme.text_secondary)),
+                            Span::styled(format!("+{}", armor_data.armor_rating), Style::default().fg(theme.success)),
+                        ]));
+                        detail_lines.push(Line::from(""));
+                    },
+                    _ => {},
+                }
+
+                detail_lines.push(Line::from(vec![
+                    Span::styled("⚖ ", Style::default().fg(theme.text_secondary)),
+                    Span::styled(format!("{:.1} kg", selected_item.weight), Style::default().fg(theme.text_primary)),
+                    Span::styled("  🪙 ", Style::default().fg(theme.warning)),
+                    Span::styled(format!("{} gp", selected_item.value), Style::default().fg(theme.warning)),
+                ]));
+
+                detail_lines
             } else {
-                vec![Line::from("No item selected")]
+                vec![
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("📋 ", Style::default().fg(theme.text_muted)),
+                        Span::styled("Select an item to view details", Style::default().fg(theme.text_muted)),
+                    ])
+                ]
             };
-            
+
             let details_panel = Paragraph::new(details)
-                .block(Block::default().borders(Borders::ALL).title("Item Details").border_style(Style::default().fg(Color::Magenta)))
+                .block(Block::default().borders(Borders::ALL).title("📝 Item Details").border_style(Style::default().fg(Color::Magenta)))
                 .wrap(ratatui::widgets::Wrap { trim: true });
             f.render_widget(details_panel, main_chunks[2]);
 
-            // Controls
-            let controls = Paragraph::new("↑↓/JK: Navigate Slots | ←→/HL: Navigate Items | ENTER: Equip | U: Unequip | ESC: Back")
-                .style(Style::default().fg(Color::DarkGray))
+            // Controls with better styling
+            let controls_content = vec![
+                Line::from(vec![
+                    Span::styled("↑↓/WS/JK ", Style::default().fg(theme.accent)),
+                    Span::styled("Slots", Style::default().fg(theme.text_secondary)),
+                    Span::styled(" • ", Style::default().fg(theme.text_muted)),
+                    Span::styled("←→/AD/HL ", Style::default().fg(theme.accent)),
+                    Span::styled("Items", Style::default().fg(theme.text_secondary)),
+                    Span::styled(" • ", Style::default().fg(theme.text_muted)),
+                    Span::styled("ENTER ", Style::default().fg(theme.success)),
+                    Span::styled("Equip", Style::default().fg(theme.text_secondary)),
+                ]),
+                Line::from(vec![
+                    Span::styled("U ", Style::default().fg(theme.warning)),
+                    Span::styled("Unequip", Style::default().fg(theme.text_secondary)),
+                    Span::styled(" • ", Style::default().fg(theme.text_muted)),
+                    Span::styled("ESC ", Style::default().fg(theme.error)),
+                    Span::styled("Back to Main Menu", Style::default().fg(theme.text_secondary)),
+                ]),
+            ];
+            let controls = Paragraph::new(controls_content)
                 .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("Controls").border_style(Style::default().fg(Color::DarkGray)));
+                .block(Block::default().borders(Borders::ALL).title("⌨ Controls").border_style(Style::default().fg(theme.border_secondary)));
             f.render_widget(controls, left_chunks[2]);
             
         } else {
@@ -3354,55 +4026,95 @@ impl GameUI {
     fn draw_tactical_combat_static(f: &mut Frame, tactical_combat_state: &TacticalCombatState) {
         let area = f.size();
         
-        // New optimized layout: Use bottom area for horizontal info strip
-        let main_chunks = Layout::default()
+        // Create a centered layout with battlefield in the middle surrounded by panels
+        let main_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(20),      // Large battlefield area (most of screen)
-                Constraint::Length(8),    // Bottom info strip
+                Constraint::Length(12), // Top panels row
+                Constraint::Min(20),    // Middle row (contains battlefield)
+                Constraint::Length(6),  // Bottom panels row (shorter for just commands)
             ])
             .split(area);
         
-        // Bottom strip: horizontal layout for all info panels
-        let bottom_chunks = Layout::default()
+        // Top row: Character Info, Skills Available, Target Info
+        let top_panels = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(25), // Current participant info
-                Constraint::Percentage(35), // Combat log (wider for readability)
-                Constraint::Percentage(20), // Action menu or controls
-                Constraint::Percentage(20), // Status & location
+                Constraint::Percentage(33), // Character Info
+                Constraint::Percentage(34), // Skills Available
+                Constraint::Percentage(33), // Target Info
             ])
-            .split(main_chunks[1]);
+            .split(main_layout[0]);
         
-        // Draw battlefield - now gets almost the entire screen!
-        Self::draw_tactical_battlefield(f, main_chunks[0], tactical_combat_state);
+        // Middle row: Actions, Battlefield, Info - all equal thirds
+        let middle_row = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(33), // Left actions column
+                Constraint::Percentage(34), // Centered battlefield (1/3)
+                Constraint::Percentage(33), // Right info column
+            ])
+            .split(main_layout[1]);
         
-        // Draw info panels in horizontal strip at bottom
-        Self::draw_current_participant_info(f, bottom_chunks[0], tactical_combat_state);
-        Self::draw_combat_log(f, bottom_chunks[1], tactical_combat_state);
+        // Left column: Movement, Combat, Skills
+        let left_panels = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(8),  // Movement
+                Constraint::Length(8),  // Combat
+                Constraint::Min(6),     // Skills
+            ])
+            .split(middle_row[0]);
         
-        // Draw action menu if open, otherwise controls
-        if tactical_combat_state.action_menu_open {
-            Self::draw_action_menu(f, bottom_chunks[2], tactical_combat_state);
-        } else if tactical_combat_state.spell_menu_open {
-            Self::draw_spell_menu(f, bottom_chunks[2], tactical_combat_state);
-        } else {
-            Self::draw_tactical_controls(f, bottom_chunks[2], tactical_combat_state);
-        }
+        // Right column: Spell Details, Inventory, Combat Log
+        let right_panels = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(10), // Spell Details
+                Constraint::Length(8),  // Inventory
+                Constraint::Min(6),     // Combat Log
+            ])
+            .split(middle_row[2]);
         
-        // Draw status info
-        Self::draw_tactical_status(f, bottom_chunks[3], tactical_combat_state);
+        // Bottom row: Controls and status
+        let bottom_panels = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(100), // Controls and navigation help
+            ])
+            .split(main_layout[2]);
+        
+        // Draw centered battlefield
+        Self::draw_centered_battlefield(f, middle_row[1], tactical_combat_state);
+        
+        // Draw top panels
+        Self::draw_character_info_panel(f, top_panels[0], tactical_combat_state);
+        Self::draw_skills_available_panel(f, top_panels[1], tactical_combat_state);
+        Self::draw_target_info_panel(f, top_panels[2], tactical_combat_state);
+        
+        // Draw left action panels
+        Self::draw_movement_panel(f, left_panels[0], tactical_combat_state);
+        Self::draw_combat_panel(f, left_panels[1], tactical_combat_state);
+        Self::draw_skills_panel(f, left_panels[2], tactical_combat_state);
+        
+        // Draw right info panels
+        Self::draw_spell_details_panel(f, right_panels[0], tactical_combat_state);
+        Self::draw_inventory_panel(f, right_panels[1], tactical_combat_state);
+        Self::draw_combat_log(f, right_panels[2], tactical_combat_state);
+        
+        // Draw bottom controls
+        Self::draw_tactical_navigation_controls(f, bottom_panels[0], tactical_combat_state);
     }
     
     fn draw_tactical_battlefield(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let battlefield = &tactical_combat_state.battlefield;
         let cursor_pos = &tactical_combat_state.cursor_position;
         
-        // Calculate viewport size
-        let view_width = (area.width.saturating_sub(2)) as i32; // -2 for borders
-        let view_height = (area.height.saturating_sub(2)) as i32; // -2 for borders
+        // Calculate optimal tactical view size (not entire terminal)
+        let optimal_view_width = (area.width.saturating_sub(2)).min(60) as i32; // Max 60 chars wide
+        let optimal_view_height = (area.height.saturating_sub(2)).min(30) as i32; // Max 30 lines tall
         
-        // Get current participant position to center view on (like player in dungeon)
+        // Get current participant position to center view on
         let center_pos = if let Some(current_participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
             current_participant.position
         } else {
@@ -3410,9 +4122,9 @@ impl GameUI {
             crate::forge::BattlefieldPosition::new(battlefield.width as i32 / 2, battlefield.height as i32 / 2)
         };
         
-        // Calculate viewport bounds centered on current participant (same as dungeon exploration)
-        let half_width = view_width / 2;
-        let half_height = view_height / 2;
+        // Calculate viewport bounds centered on current participant with optimal size
+        let half_width = optimal_view_width / 2;
+        let half_height = optimal_view_height / 2;
         let start_x = (center_pos.x - half_width).max(0);
         let end_x = (center_pos.x + half_width).min(battlefield.width as i32 - 1);
         let start_y = (center_pos.y - half_height).max(0);
@@ -3473,22 +4185,57 @@ impl GameUI {
                         }
                     }
                 }
-                
-                // Check for participants at this position
+
+                // Check for participants at this position with enhanced visuals
                 for (participant_id, participant_pos) in battlefield.participant_positions.iter() {
                     if participant_pos == &pos {
                         if let Some(participant) = tactical_combat_state.participants.get(*participant_id) {
+                            let hp_current = participant.base_participant.combat_stats.hit_points.current;
+                            let hp_max = participant.base_participant.combat_stats.hit_points.max;
+                            let hp_percentage = (hp_current as f32 / hp_max as f32) * 100.0;
+
                             if participant.base_participant.is_player {
                                 tile_char = '@';
-                                tile_color = Color::LightGreen;
+                                // Color based on HP status
+                                tile_color = if hp_percentage >= 66.0 {
+                                    Color::LightGreen
+                                } else if hp_percentage >= 33.0 {
+                                    Color::Yellow
+                                } else {
+                                    Color::LightRed
+                                };
                             } else {
-                                tile_char = 'E';
-                                tile_color = Color::LightRed;
+                                // Different icons for different enemy types based on name/type
+                                let name_lower = participant.base_participant.name.to_lowercase();
+                                if name_lower.contains("goblin") || name_lower.contains("kobold") {
+                                    tile_char = 'g';
+                                } else if name_lower.contains("orc") {
+                                    tile_char = 'o';
+                                } else if name_lower.contains("troll") {
+                                    tile_char = 'T';
+                                } else if name_lower.contains("dragon") {
+                                    tile_char = 'D';
+                                } else if name_lower.contains("undead") || name_lower.contains("skeleton") || name_lower.contains("zombie") {
+                                    tile_char = 'z';
+                                } else if name_lower.contains("demon") || name_lower.contains("devil") {
+                                    tile_char = '&';
+                                } else {
+                                    tile_char = 'E'; // Generic enemy
+                                }
+
+                                // Color based on HP status for enemies too
+                                tile_color = if hp_percentage >= 66.0 {
+                                    Color::Red
+                                } else if hp_percentage >= 33.0 {
+                                    Color::LightYellow
+                                } else {
+                                    Color::DarkGray // Heavily wounded
+                                };
                             }
                         }
                     }
                 }
-                
+
                 // Check for environmental features
                 for feature in &battlefield.environmental_features {
                     if feature.position == pos {
@@ -3553,13 +4300,14 @@ impl GameUI {
             battlefield_lines.push(Line::from(line_spans));
         }
         
+        let theme = framework::UITheme::forge_theme();
         let battlefield_widget = Paragraph::new(battlefield_lines)
             .block(Block::default()
                 .borders(Borders::ALL)
-                .title(format!("Tactical Battlefield - Combat Minute {}", 
+                .title(format!("⚔ Tactical Battlefield - Minute {} ⚔",
                     tactical_combat_state.round))
-                .border_style(Style::default().fg(Color::Cyan)));
-        
+                .border_style(Style::default().fg(theme.primary)));
+
         f.render_widget(battlefield_widget, area);
     }
     
@@ -3676,33 +4424,815 @@ impl GameUI {
     }
     
     fn draw_combat_log(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let theme = framework::UITheme::forge_theme();
+
         // Adjust for horizontal layout - fit more lines in limited height
         let available_lines = (area.height.saturating_sub(2)).max(1) as usize; // Account for borders
-        
+        let available_width = area.width.saturating_sub(2) as usize; // Account for borders
+
+        // Helper to determine message color based on content
+        let get_message_style = |msg: &str| -> Style {
+            let msg_lower = msg.to_lowercase();
+            if msg_lower.contains("===") || msg_lower.contains("combat minute") {
+                // Round/minute headers
+                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+            } else if msg_lower.contains("hits") || msg_lower.contains("strikes") || msg_lower.contains("attack") {
+                // Attack messages
+                Style::default().fg(theme.primary)
+            } else if msg_lower.contains("damage") || msg_lower.contains("hp") && msg_lower.contains("-") {
+                // Damage messages
+                Style::default().fg(theme.error)
+            } else if msg_lower.contains("heals") || msg_lower.contains("restores") || msg_lower.contains("+") {
+                // Healing messages
+                Style::default().fg(theme.success)
+            } else if msg_lower.contains("casts") || msg_lower.contains("spell") || msg_lower.contains("magic") {
+                // Magic messages
+                Style::default().fg(theme.sp_color)
+            } else if msg_lower.contains("misses") || msg_lower.contains("fails") || msg_lower.contains("dodges") {
+                // Miss/fail messages
+                Style::default().fg(theme.text_muted)
+            } else if msg_lower.contains("dies") || msg_lower.contains("defeated") || msg_lower.contains("victory") {
+                // Death/victory messages
+                Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)
+            } else {
+                // Default messages
+                Style::default().fg(theme.text_primary)
+            }
+        };
+
         let log_lines: Vec<Line> = tactical_combat_state.combat_log
             .iter()
-            .rev() // Show most recent first
-            .take(available_lines)
+            .skip(tactical_combat_state.combat_log.len().saturating_sub(available_lines)) // Show oldest first, newest at bottom
             .map(|msg| {
-                // Truncate long lines to fit horizontally better
-                if msg.len() > 45 {
-                    Line::from(format!("{}...", &msg[..42]))
+                let display_msg = if msg.len() > available_width {
+                    let truncate_at = available_width.saturating_sub(3); // Leave space for "..."
+                    format!("{}...", &msg[..truncate_at])
                 } else {
-                    Line::from(msg.clone())
-                }
+                    msg.clone()
+                };
+
+                let style = get_message_style(msg);
+
+                // Add icons for certain message types
+                let icon = if msg.contains("===") {
+                    "⚡ "
+                } else if msg.to_lowercase().contains("hits") {
+                    "⚔ "
+                } else if msg.to_lowercase().contains("damage") {
+                    "💥 "
+                } else if msg.to_lowercase().contains("casts") {
+                    "✨ "
+                } else if msg.to_lowercase().contains("dies") {
+                    "💀 "
+                } else {
+                    ""
+                };
+
+                Line::from(vec![
+                    Span::styled(icon, style),
+                    Span::styled(display_msg, style),
+                ])
             })
             .collect();
-        
+
         let log_widget = Paragraph::new(log_lines)
             .block(Block::default()
                 .borders(Borders::ALL)
-                .title("Log")
-                .border_style(Style::default().fg(Color::Cyan)))
+                .title("📜 Combat Log")
+                .border_style(Style::default().fg(theme.border_primary)))
+            .style(Style::default().bg(theme.background))
             .wrap(ratatui::widgets::Wrap { trim: true });
-        
+
         f.render_widget(log_widget, area);
     }
     
+    fn draw_movement_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let is_active = tactical_combat_state.active_panel == CombatPanel::Movement;
+        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
+        
+        let movement_options = vec![
+            "[1] Move Only",
+            "[2] Move + Attack",
+            "[3] Charge",
+            "[4] Sprint",
+            "[5] Tactical Retreat",
+        ];
+        
+        let lines: Vec<Line> = movement_options
+            .iter()
+            .enumerate()
+            .map(|(i, option)| {
+                let style = if is_active && i == tactical_combat_state.panel_selections.movement_index {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(Span::styled(*option, style))
+            })
+            .collect();
+        
+        let movement_panel = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Movement")
+                .border_style(Style::default().fg(border_color)));
+        
+        f.render_widget(movement_panel, area);
+    }
+    
+    fn draw_combat_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let is_active = tactical_combat_state.active_panel == CombatPanel::Combat;
+        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
+        
+        let combat_options = vec![
+            "[A] Attack",
+            "[D] Defend",
+            "[G] Grapple",
+            "[R] Ready Item",
+            "[W] Switch Weapon",
+        ];
+        
+        let lines: Vec<Line> = combat_options
+            .iter()
+            .enumerate()
+            .map(|(i, option)| {
+                let style = if is_active && i == tactical_combat_state.panel_selections.combat_index {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(Span::styled(*option, style))
+            })
+            .collect();
+        
+        let combat_panel = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Combat")
+                .border_style(Style::default().fg(border_color)));
+        
+        f.render_widget(combat_panel, area);
+    }
+    
+    fn draw_skills_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let is_active = tactical_combat_state.active_panel == CombatPanel::Skills;
+        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
+        
+        let skills_options = vec![
+            "[S] Cast Spell",
+            "[P] Perception Check",
+            "[T] Tactical Analysis",
+            "[I] Use Item",
+            "[E] End Turn",
+        ];
+        
+        let lines: Vec<Line> = skills_options
+            .iter()
+            .enumerate()
+            .map(|(i, option)| {
+                let style = if is_active && i == tactical_combat_state.panel_selections.skills_index {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(Span::styled(*option, style))
+            })
+            .collect();
+        
+        let skills_panel = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Skills")
+                .border_style(Style::default().fg(border_color)));
+        
+        f.render_widget(skills_panel, area);
+    }
+    
+    fn draw_target_info(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let mut lines = vec![];
+        
+        // Find target at cursor position
+        let cursor_pos = &tactical_combat_state.cursor_position;
+        let mut found_target = false;
+        
+        for (participant_id, pos) in &tactical_combat_state.battlefield.participant_positions {
+            if pos == cursor_pos {
+                if let Some(participant) = tactical_combat_state.participants.get(*participant_id) {
+                    found_target = true;
+                    lines.push(Line::from(Span::styled(&participant.base_participant.name, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+                    lines.push(Line::from(format!("HP: {}/{}", 
+                        participant.base_participant.combat_stats.hit_points.current,
+                        participant.base_participant.combat_stats.hit_points.max
+                    )));
+                    
+                    // Calculate distance from current participant
+                    if let Some(current) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
+                        let distance = current.position.manhattan_distance_to(cursor_pos);
+                        lines.push(Line::from(format!("Distance: {}m", distance)));
+                    }
+                    
+                    lines.push(Line::from(format!("Movement: {}/{}", 
+                        participant.movement_remaining,
+                        participant.movement_capabilities.movement_speed
+                    )));
+                }
+            }
+        }
+        
+        if !found_target {
+            lines.push(Line::from(Span::styled("No Target", Style::default().fg(Color::DarkGray))));
+            lines.push(Line::from(""));
+            lines.push(Line::from("Move cursor over"));
+            lines.push(Line::from("an enemy to see"));
+            lines.push(Line::from("their information"));
+        }
+        
+        let target_panel = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Target")
+                .border_style(Style::default().fg(Color::Cyan)));
+        
+        f.render_widget(target_panel, area);
+    }
+    
+    fn draw_navigation_hints(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let active_panel_name = match tactical_combat_state.active_panel {
+            CombatPanel::Battlefield => "Battlefield",
+            CombatPanel::Movement => "Movement",
+            CombatPanel::Combat => "Combat",
+            CombatPanel::Skills => "Skills",
+            CombatPanel::CharacterInfo => "Character Info",
+            CombatPanel::TargetInfo => "Target Info",
+            CombatPanel::SkillsAvailable => "Skills Available",
+            CombatPanel::Inventory => "Inventory",
+            CombatPanel::SpellDetails => "Spell Details",
+        };
+        
+        let hint_text = format!("[TAB] Switch Panel | [hjkl] Navigate | [HJKL] Change Panel | Active: {}", active_panel_name);
+        
+        let hints = Paragraph::new(hint_text)
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)));
+        
+        f.render_widget(hints, area);
+    }
+    
+    fn draw_quick_battlefield_status(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let current_participant = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index);
+        let status_text = if let Some(participant) = current_participant {
+            format!("Turn: {} | Pos: ({}, {})", 
+                participant.base_participant.name,
+                participant.position.x,
+                participant.position.y
+            )
+        } else {
+            "No active participant".to_string()
+        };
+        
+        let status = Paragraph::new(status_text)
+            .style(Style::default().fg(Color::Gray))
+            .alignment(Alignment::Center)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)));
+        
+        f.render_widget(status, area);
+    }
+    
+    fn draw_equipment_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let mut lines = vec![
+            Line::from(Span::styled("Equipment", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+        ];
+        
+        if let Some(participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
+            if let Some(weapon) = &participant.base_participant.weapon {
+                lines.push(Line::from(format!("⚔️ {}", weapon.name)));
+                lines.push(Line::from(format!("   Dmg: {} (+{})", weapon.damage_dice, weapon.damage_bonus)));
+            } else {
+                lines.push(Line::from("⚔️ No weapon"));
+            }
+            
+            if let Some(armor) = &participant.base_participant.armor {
+                lines.push(Line::from(format!("🛡️ {}", armor.name)));
+                lines.push(Line::from(format!("   AR: {}", armor.armor_rating)));
+            } else {
+                lines.push(Line::from("🛡️ No armor"));
+            }
+            
+            if let Some(shield) = &participant.base_participant.shield {
+                lines.push(Line::from(format!("🔰 {}", shield.name)));
+            } else {
+                lines.push(Line::from("🔰 No shield"));
+            }
+        } else {
+            lines.push(Line::from("No participant selected"));
+        }
+        
+        let equipment = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Equipment")
+                .border_style(Style::default().fg(Color::Blue)));
+        
+        f.render_widget(equipment, area);
+    }
+    
+    fn draw_inventory_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let is_active = tactical_combat_state.active_panel == CombatPanel::Inventory;
+        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
+        
+        let mut lines = vec![
+            Line::from(Span::styled("QUICK ITEMS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+        ];
+        
+        if let Some(_participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
+            let selected_index = tactical_combat_state.panel_selections.inventory_index;
+            let items = vec![
+                "🧪 Health Potion",
+                "⚡ Mana Potion", 
+                "🗡️ Throwing Knife",
+                "💣 Bomb"
+            ];
+            
+            for (i, item) in items.iter().enumerate() {
+                let style = if is_active && i == selected_index {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                lines.push(Line::from(Span::styled(*item, style)));
+            }
+        } else {
+            lines.push(Line::from("No items available"));
+        }
+        
+        let inventory = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Combat Items")
+                .border_style(Style::default().fg(border_color)));
+        
+        f.render_widget(inventory, area);
+    }
+    
+    fn draw_effects_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let mut lines = vec![
+            Line::from(Span::styled("Active Effects", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+        ];
+        
+        if let Some(participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
+            // Show active status effects
+            if participant.base_participant.is_alive() {
+                lines.push(Line::from("✅ Healthy"));
+            }
+            
+            // Add more effects here based on game state
+            lines.push(Line::from("🔥 No effects"));
+        } else {
+            lines.push(Line::from("No participant"));
+        }
+        
+        let effects = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Status Effects")
+                .border_style(Style::default().fg(Color::Magenta)));
+        
+        f.render_widget(effects, area);
+    }
+    
+    fn draw_tactical_navigation_controls(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let controls = match tactical_combat_state.combat_phase {
+            crate::ui::CombatPhase::TacticalMovement => {
+                vec![
+                    Line::from(vec![
+                        Span::styled("MOVEMENT: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::raw("WASD = Move Cursor | ENTER = Move Player | E = End Turn")
+                    ]),
+                    Line::from(vec![
+                        Span::styled("ACTIONS: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        Span::raw("1 = Attack | 2 = Cast Spell | 3 = Defend | 4 = Use Item")
+                    ]),
+                    Line::from(vec![
+                        Span::styled("PANELS: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::raw("HJKL = Navigate Panels | TAB = Action Menu | F = Forge Combat")
+                    ]),
+                ]
+            },
+            crate::ui::CombatPhase::TacticalActionSelection => {
+                vec![
+                    Line::from(vec![
+                        Span::styled("SPELL MENU: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                        Span::raw("J/K = Navigate Spells | ENTER = Select | ESC = Cancel")
+                    ]),
+                ]
+            },
+            crate::ui::CombatPhase::TacticalTargeting => {
+                vec![
+                    Line::from(vec![
+                        Span::styled("TARGETING: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                        Span::raw("WASD = Move Target | ENTER = Confirm | ESC = Cancel")
+                    ]),
+                ]
+            },
+            crate::ui::CombatPhase::ForgeActionDeclaration => {
+                vec![
+                    Line::from(vec![
+                        Span::styled("FORGE ACTIONS: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                        Span::raw("1 = Melee | 2 = Missile | 3 = Spell | 4 = Defend | 5 = Item | 6 = Wait")
+                    ]),
+                    Line::from(vec![
+                        Span::styled("CONTROLS: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        Span::raw("TAB = Skip Turn | ESC = Exit Forge Mode")
+                    ]),
+                ]
+            },
+            _ => {
+                vec![
+                    Line::from(vec![
+                        Span::styled("COMBAT: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::raw("Use number keys for quick actions or TAB for menu")
+                    ]),
+                ]
+            }
+        };
+        
+        let controls_panel = Paragraph::new(controls)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Controls")
+                .border_style(Style::default().fg(Color::DarkGray)))
+            .alignment(Alignment::Center);
+        
+        f.render_widget(controls_panel, area);
+    }
+    
+    // New comprehensive panel functions for the redesigned layout
+    
+    fn draw_centered_battlefield(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        // Calculate the actual battlefield dimensions
+        let battlefield_width = 60.min(area.width.saturating_sub(4) as usize);
+        let battlefield_height = 30.min(area.height.saturating_sub(4) as usize);
+        
+        // Create a centered area for the actual battlefield
+        let battlefield_area = Self::centered_rect(
+            ((battlefield_width as f32 / area.width as f32) * 100.0) as u16,
+            ((battlefield_height as f32 / area.height as f32) * 100.0) as u16,
+            area
+        );
+        
+        // Fill the entire area with decorative pattern first
+        let mut pattern_lines = Vec::new();
+        let pattern_chars = ['·', '⋅', '∘', '◦', '○', '●'];
+        let mut char_idx = 0;
+        
+        for y in 0..area.height {
+            let mut line_spans = Vec::new();
+            for x in 0..area.width {
+                // Check if this position is within the battlefield area
+                let is_battlefield = x >= battlefield_area.x && 
+                                   x < battlefield_area.x + battlefield_area.width &&
+                                   y >= battlefield_area.y && 
+                                   y < battlefield_area.y + battlefield_area.height;
+                
+                if !is_battlefield {
+                    // Use decorative pattern outside battlefield
+                    let pattern_char = pattern_chars[char_idx % pattern_chars.len()];
+                    char_idx = (char_idx + 1) % (pattern_chars.len() * 3); // Slower cycling
+                    line_spans.push(Span::styled(
+                        pattern_char.to_string(),
+                        Style::default().fg(Color::DarkGray)
+                    ));
+                } else {
+                    // Leave space for battlefield
+                    line_spans.push(Span::raw(" "));
+                }
+            }
+            pattern_lines.push(Line::from(line_spans));
+        }
+        
+        // Render the background pattern
+        let theme = framework::UITheme::forge_theme();
+        let background = Paragraph::new(pattern_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("⚔ Tactical View ⚔")
+                .border_style(Style::default().fg(theme.accent)));
+        f.render_widget(background, area);
+        
+        // Now render the actual battlefield in the centered area
+        Self::draw_tactical_battlefield(f, battlefield_area, tactical_combat_state);
+    }
+    
+    fn draw_character_info_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let theme = framework::UITheme::forge_theme();
+        let is_active = tactical_combat_state.active_panel == CombatPanel::CharacterInfo;
+        let border_color = if is_active { theme.accent } else { theme.border_secondary };
+
+        let mut lines = vec![];
+
+        if let Some(participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
+            let hp_current = participant.base_participant.combat_stats.hit_points.current;
+            let hp_max = participant.base_participant.combat_stats.hit_points.max;
+            let sp_current = participant.base_participant.magic.spell_points.current;
+            let sp_max = participant.base_participant.magic.spell_points.max;
+
+            // Character name
+            lines.push(Line::from(vec![
+                Span::styled("@ ", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+                Span::styled(&participant.base_participant.name, Style::default()
+                    .fg(theme.text_highlight)
+                    .add_modifier(Modifier::BOLD)),
+            ]));
+            lines.push(Line::from(""));
+
+            // HP with bar
+            lines.push(Line::from(vec![
+                Span::styled("❤ ", Style::default().fg(theme.error)),
+                Span::styled(format!("{}/{}", hp_current, hp_max),
+                    Style::default().fg(theme.text_primary)),
+            ]));
+            let hp_bar_width = area.width.saturating_sub(6).min(15) as usize;
+            lines.push(Line::from(
+                framework::art::hp_bar_colored(hp_current, hp_max, hp_bar_width, &theme)
+            ));
+
+            // SP with bar
+            lines.push(Line::from(vec![
+                Span::styled("✨ ", Style::default().fg(theme.sp_color)),
+                Span::styled(format!("{}/{}", sp_current, sp_max),
+                    Style::default().fg(theme.text_primary)),
+            ]));
+            let sp_bar = framework::art::progress_bar(sp_current, sp_max, hp_bar_width, '█', '░');
+            lines.push(Line::from(Span::styled(sp_bar, Style::default().fg(theme.sp_color))));
+
+            lines.push(Line::from(""));
+
+            // Combat stats
+            lines.push(Line::from(vec![
+                Span::styled("⚔ ", Style::default().fg(theme.primary)),
+                Span::styled(format!("{}", participant.base_participant.combat_stats.attack_value),
+                    Style::default().fg(theme.accent)),
+                Span::styled("  🛡 ", Style::default().fg(theme.info)),
+                Span::styled(format!("{}", participant.base_participant.combat_stats.defensive_value),
+                    Style::default().fg(theme.info)),
+            ]));
+
+            // Movement
+            let move_color = if participant.movement_remaining > 0 { theme.success } else { theme.text_muted };
+            lines.push(Line::from(vec![
+                Span::styled("🏃 ", Style::default().fg(move_color)),
+                Span::styled(format!("{}/{}",
+                    participant.movement_remaining,
+                    participant.movement_capabilities.movement_speed),
+                    Style::default().fg(move_color)),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled("No character", Style::default().fg(theme.text_muted))));
+        }
+
+        let panel = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("👤 Character")
+                .border_style(Style::default().fg(border_color)))
+            .style(Style::default().bg(theme.background));
+
+        f.render_widget(panel, area);
+    }
+    
+    fn draw_skills_available_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let is_active = tactical_combat_state.active_panel == CombatPanel::SkillsAvailable;
+        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
+        
+        let mut lines = vec![
+            Line::from(Span::styled("SKILLS AVAILABLE", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+        ];
+        
+        if let Some(participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
+            // Show relevant skills for combat
+            lines.push(Line::from(Span::styled("Combat Skills:", Style::default().fg(Color::Red))));
+            lines.push(Line::from("○ Sword: 15% (WSL 0)"));
+            lines.push(Line::from("○ Bow: 12% (WSL 0)"));
+            lines.push(Line::from(""));
+            
+            lines.push(Line::from(Span::styled("Basic Skills:", Style::default().fg(Color::Cyan))));
+            lines.push(Line::from("✓ Perception: 22%"));
+            lines.push(Line::from("○ Tactics: 17%"));
+            
+            // Show spells if available
+            if !participant.base_participant.magic.known_spells.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled("Spells:", Style::default().fg(Color::Blue))));
+                for (_school, spells) in &participant.base_participant.magic.known_spells {
+                    for spell in spells {
+                        lines.push(Line::from(format!("✓ {}", spell)));
+                    }
+                }
+            }
+        }
+        
+        let panel = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Available Skills")
+                .border_style(Style::default().fg(border_color)));
+        
+        f.render_widget(panel, area);
+    }
+    
+    fn draw_target_info_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let theme = framework::UITheme::forge_theme();
+        let is_active = tactical_combat_state.active_panel == CombatPanel::TargetInfo;
+        let border_color = if is_active { theme.accent } else { theme.border_secondary };
+
+        let mut lines = vec![];
+        let cursor_pos = &tactical_combat_state.cursor_position;
+        let mut found_target = false;
+
+        for (participant_id, pos) in &tactical_combat_state.battlefield.participant_positions {
+            if pos == cursor_pos {
+                if let Some(participant) = tactical_combat_state.participants.get(*participant_id) {
+                    found_target = true;
+
+                    let hp_current = participant.base_participant.combat_stats.hit_points.current;
+                    let hp_max = participant.base_participant.combat_stats.hit_points.max;
+
+                    // Target name with icon
+                    let name_icon = if participant.base_participant.is_player { "@ " } else { "E " };
+                    let name_color = if participant.base_participant.is_player { theme.success } else { theme.error };
+                    lines.push(Line::from(vec![
+                        Span::styled(name_icon, Style::default().fg(name_color).add_modifier(Modifier::BOLD)),
+                        Span::styled(&participant.base_participant.name, Style::default()
+                            .fg(theme.text_highlight)
+                            .add_modifier(Modifier::BOLD)),
+                    ]));
+                    lines.push(Line::from(""));
+
+                    // HP with bar
+                    lines.push(Line::from(vec![
+                        Span::styled("❤ ", Style::default().fg(theme.error)),
+                        Span::styled(format!("{}/{}", hp_current, hp_max),
+                            Style::default().fg(theme.text_primary)),
+                    ]));
+                    let hp_bar_width = area.width.saturating_sub(6).min(15) as usize;
+                    lines.push(Line::from(
+                        framework::art::hp_bar_colored(hp_current, hp_max, hp_bar_width, &theme)
+                    ));
+
+                    lines.push(Line::from(""));
+
+                    // Combat stats
+                    lines.push(Line::from(vec![
+                        Span::styled("⚔ ", Style::default().fg(theme.primary)),
+                        Span::styled(format!("{}", participant.base_participant.combat_stats.attack_value),
+                            Style::default().fg(theme.accent)),
+                        Span::styled("  🛡 ", Style::default().fg(theme.info)),
+                        Span::styled(format!("{}", participant.base_participant.combat_stats.defensive_value),
+                            Style::default().fg(theme.info)),
+                    ]));
+
+                    // Distance
+                    if let Some(current) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
+                        let distance = current.position.manhattan_distance_to(cursor_pos);
+                        let dist_color = if distance <= 1 { theme.success } else if distance <= 5 { theme.warning } else { theme.text_secondary };
+                        lines.push(Line::from(vec![
+                            Span::styled("📍 ", Style::default().fg(dist_color)),
+                            Span::styled(format!("{}m", distance), Style::default().fg(dist_color)),
+                        ]));
+                    }
+
+                    // Movement
+                    let move_color = if participant.movement_remaining > 0 { theme.success } else { theme.text_muted };
+                    lines.push(Line::from(vec![
+                        Span::styled("🏃 ", Style::default().fg(move_color)),
+                        Span::styled(format!("{}/{}",
+                            participant.movement_remaining,
+                            participant.movement_capabilities.movement_speed),
+                            Style::default().fg(move_color)),
+                    ]));
+                }
+            }
+        }
+
+        if !found_target {
+            lines.push(Line::from(vec![
+                Span::styled("🎯 ", Style::default().fg(theme.text_muted)),
+                Span::styled("No Target", Style::default().fg(theme.text_muted)),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("Move cursor over", Style::default().fg(theme.text_secondary)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("an enemy to see", Style::default().fg(theme.text_secondary)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("their information", Style::default().fg(theme.text_secondary)),
+            ]));
+        }
+        
+        let panel = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("🎯 Target Info")
+                .border_style(Style::default().fg(border_color)))
+            .style(Style::default().bg(theme.background));
+
+        f.render_widget(panel, area);
+    }
+    
+    fn draw_spell_details_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let is_active = tactical_combat_state.active_panel == CombatPanel::SpellDetails;
+        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
+        
+        let mut lines = vec![
+            Line::from(Span::styled("SPELL DETAILS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+        ];
+        
+        if let Some((_spell_name, spell)) = tactical_combat_state.available_spells.get(tactical_combat_state.selected_spell_index) {
+            lines.push(Line::from(Span::styled(&spell.name, Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))));
+            lines.push(Line::from(format!("Cost: {} SP", spell.cost)));
+            lines.push(Line::from(format!("Level: {}", spell.level)));
+            lines.push(Line::from(format!("Success: {}%", spell.success_chance_base)));
+            lines.push(Line::from(""));
+            lines.push(Line::from(spell.description.clone()));
+        } else {
+            lines.push(Line::from("No spell selected"));
+            lines.push(Line::from(""));
+            lines.push(Line::from("Select a spell from"));
+            lines.push(Line::from("the Skills panel to"));
+            lines.push(Line::from("see detailed info"));
+        }
+        
+        let panel = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Spell Details")
+                .border_style(Style::default().fg(border_color)));
+        
+        f.render_widget(panel, area);
+    }
+    
+    fn draw_navigation_controls(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
+        let nav_mode_text = match tactical_combat_state.navigation_mode {
+            NavigationMode::PanelNavigation => "Panel Navigation (Shift+HJKL)",
+            NavigationMode::WithinPanel => "Within Panel (HJKL)",
+            NavigationMode::Movement => "Battlefield Movement (WASD)",
+        };
+        
+        let active_panel_name = match tactical_combat_state.active_panel {
+            CombatPanel::Battlefield => "Battlefield",
+            CombatPanel::Movement => "Movement",
+            CombatPanel::Combat => "Combat", 
+            CombatPanel::Skills => "Skills",
+            CombatPanel::CharacterInfo => "Character Info",
+            CombatPanel::TargetInfo => "Target Info",
+            CombatPanel::SkillsAvailable => "Skills Available",
+            CombatPanel::Inventory => "Inventory",
+            CombatPanel::SpellDetails => "Spell Details",
+        };
+        
+        let controls_text = vec![
+            Line::from(vec![
+                Span::styled("Mode: ", Style::default().fg(Color::Gray)),
+                Span::styled(nav_mode_text, Style::default().fg(Color::Yellow)),
+                Span::raw(" | "),
+                Span::styled("Active: ", Style::default().fg(Color::Gray)),
+                Span::styled(active_panel_name, Style::default().fg(Color::Cyan)),
+            ]),
+            Line::from(vec![
+                Span::styled("Shift+HJKL: ", Style::default().fg(Color::Green)),
+                Span::raw("Switch Panels | "),
+                Span::styled("HJKL: ", Style::default().fg(Color::Green)), 
+                Span::raw("Navigate Items | "),
+                Span::styled("WASD: ", Style::default().fg(Color::Green)),
+                Span::raw("Move Player | "),
+                Span::styled("Enter: ", Style::default().fg(Color::Green)),
+                Span::raw("Select"),
+            ]),
+        ];
+        
+        let controls = Paragraph::new(controls_text)
+            .style(Style::default().fg(Color::Gray))
+            .alignment(Alignment::Center)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Controls")
+                .border_style(Style::default().fg(Color::DarkGray)));
+        
+        f.render_widget(controls, area);
+    }
+
     fn draw_action_menu(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let action_descriptions = [
             ("Move Only", "Move without attacking"),
@@ -3844,6 +5374,7 @@ impl GameUI {
         f.render_widget(controls_widget, area);
     }
     
+    #[allow(dead_code)]
     fn draw_tactical_status(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
         let players_alive = tactical_combat_state.participants.iter()
             .filter(|p| p.base_participant.is_player && p.base_participant.is_alive())
@@ -4197,37 +5728,60 @@ impl GameUI {
     }
     
     fn draw_integrated_tactical_combat(f: &mut Frame, area: ratatui::layout::Rect, dungeon_state: &DungeonExplorationState, tactical_combat: &TacticalCombatState, _current_character: Option<&crate::forge::ForgeCharacter>) {
-        // New optimized layout: compact battlefield with more information panels
+        // Four-column layout: smaller battlefield, action panels, info panels, extra panel
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(50),      // Compact battlefield area (fixed width)
-                Constraint::Min(0),          // Information panels area
+                Constraint::Percentage(25), // Smaller battlefield area
+                Constraint::Percentage(25), // Action panels
+                Constraint::Percentage(25), // Info panels  
+                Constraint::Percentage(25), // Equipment & inventory panel
             ])
             .split(area);
-
-        // Left side: Compact battlefield with title and controls
+        
+        // Action column: movement, combat, skills panels
+        let action_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(8),  // Movement options
+                Constraint::Length(8),  // Combat actions
+                Constraint::Length(8),  // Skills/spells
+                Constraint::Min(1),     // Remaining space
+            ])
+            .split(main_chunks[1]);
+        
+        // Battlefield column: title + smaller battlefield
         let battlefield_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),       // Combat status title
-                Constraint::Min(0),          // Compact tactical battlefield
-                Constraint::Length(4),       // Movement controls
+                Constraint::Length(3),  // Title
+                Constraint::Percentage(67), // Battlefield (2/3 height)
+                Constraint::Min(3),     // Quick status
             ])
             .split(main_chunks[0]);
-
-        // Right side: Multiple information panels
+        
+        // Info column: status, target info, combat log
         let info_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(8),       // Current participant detailed info
-                Constraint::Length(8),       // Available actions/spells panel
-                Constraint::Length(6),       // Combat statistics
-                Constraint::Min(0),          // Combat log
+                Constraint::Length(8),  // Current participant status
+                Constraint::Length(8),  // Target information
+                Constraint::Min(10),    // Combat log
+                Constraint::Length(3),  // Controls hint
             ])
-            .split(main_chunks[1]);
-
-        // Combat title - show different info for Forge vs regular combat
+            .split(main_chunks[2]);
+        
+        // Equipment column: equipment, inventory, effects
+        let equipment_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(10), // Equipment panel
+                Constraint::Length(8),  // Inventory panel
+                Constraint::Min(5),     // Active effects panel
+            ])
+            .split(main_chunks[3]);
+        
+        // Draw battlefield title
         let title_text = match tactical_combat.combat_phase {
             CombatPhase::ForgeInitiativeRoll | CombatPhase::ForgeActionDeclaration | 
             CombatPhase::ForgeActionResolution | CombatPhase::ForgeCombatMinuteEnd => {
@@ -4248,25 +5802,28 @@ impl GameUI {
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Red)));
         f.render_widget(title, battlefield_chunks[0]);
-
-        // Compact tactical battlefield
-        Self::draw_compact_tactical_battlefield(f, battlefield_chunks[1], tactical_combat);
         
-        // Combat controls
-        Self::draw_tactical_controls(f, battlefield_chunks[2], tactical_combat);
+        // Draw smaller battlefield
+        Self::draw_tactical_battlefield(f, battlefield_chunks[1], tactical_combat);
         
-        // Right side information panels
-        // Detailed participant info
-        Self::draw_detailed_participant_info(f, info_chunks[0], tactical_combat);
+        // Draw quick battlefield status
+        Self::draw_quick_battlefield_status(f, battlefield_chunks[2], tactical_combat);
         
-        // Actions/Spells panel
-        Self::draw_actions_spells_panel(f, info_chunks[1], tactical_combat);
+        // Draw action panels
+        Self::draw_movement_panel(f, action_chunks[0], tactical_combat);
+        Self::draw_combat_panel(f, action_chunks[1], tactical_combat);
+        Self::draw_skills_panel(f, action_chunks[2], tactical_combat);
         
-        // Combat statistics
-        Self::draw_combat_statistics(f, info_chunks[2], tactical_combat);
+        // Draw info panels
+        Self::draw_current_participant_info(f, info_chunks[0], tactical_combat);
+        Self::draw_target_info(f, info_chunks[1], tactical_combat);
+        Self::draw_combat_log(f, info_chunks[2], tactical_combat);
+        Self::draw_navigation_hints(f, info_chunks[3], tactical_combat);
         
-        // Combat log
-        Self::draw_combat_log(f, info_chunks[3], tactical_combat);
+        // Draw equipment panels
+        Self::draw_equipment_panel(f, equipment_chunks[0], tactical_combat);
+        Self::draw_inventory_panel(f, equipment_chunks[1], tactical_combat);
+        Self::draw_effects_panel(f, equipment_chunks[2], tactical_combat);
         
         // PROPER RATATUI PATTERN: Only render ONE modal at a time, in proper order
         // Check for active modals in priority order (spell selection takes precedence)
@@ -4464,14 +6021,14 @@ impl GameUI {
         
         // Middle: Spell details and enhancement options
         if let Some((_, selected_spell)) = tactical_combat.available_spells.get(tactical_combat.selected_spell_index) {
-            Self::draw_spell_details_panel(f, main_chunks[1], selected_spell);
+            Self::draw_spell_enhancement_panel(f, main_chunks[1], selected_spell);
         }
         
         // Right: Character info and instructions
         Self::draw_spell_character_info(f, main_chunks[2], tactical_combat);
     }
     
-    fn draw_spell_details_panel(f: &mut Frame, area: ratatui::layout::Rect, spell: &crate::forge::magic::Spell) {
+    fn draw_spell_enhancement_panel(f: &mut Frame, area: ratatui::layout::Rect, spell: &crate::forge::magic::Spell) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -4888,5 +6445,500 @@ impl GameUI {
                 Constraint::Percentage((100 - percent_x) / 2),
             ])
             .split(popup_layout[1])[1]
+    }
+
+    // Character Sheet Panel Drawing Functions
+    fn draw_basic_info_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
+        let theme = framework::UITheme::forge_theme();
+
+        let info_lines = vec![
+            framework::art::section_header("CHARACTER", area.width.saturating_sub(4) as usize, &theme),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Name: ", Style::default().fg(theme.text_secondary)),
+                Span::styled(&character.name, Style::default()
+                    .fg(theme.text_highlight)
+                    .add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("Race: ", Style::default().fg(theme.text_secondary)),
+                Span::styled(&character.race.name, Style::default().fg(theme.info)),
+            ]),
+            Line::from(vec![
+                Span::styled("Level: ", Style::default().fg(theme.text_secondary)),
+                Span::styled(character.level.to_string(), Style::default().fg(theme.accent)),
+            ]),
+            Line::from(vec![
+                Span::styled("XP: ", Style::default().fg(theme.text_secondary)),
+                Span::styled(format!("{}", character.experience), Style::default().fg(theme.text_primary)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("🪙 ", Style::default().fg(theme.warning)),
+                Span::styled(format!("{} gold", character.gold), Style::default()
+                    .fg(theme.warning)
+                    .add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("Created: ", Style::default().fg(theme.text_muted)),
+                Span::styled(character.created_at.format("%Y-%m-%d").to_string(),
+                    Style::default().fg(theme.text_secondary)),
+            ]),
+        ];
+
+        let panel = Paragraph::new(info_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Basic Information")
+                .border_style(Style::default().fg(theme.border_primary)))
+            .style(Style::default().bg(theme.background));
+
+        f.render_widget(panel, area);
+    }
+
+    fn draw_characteristics_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
+        let theme = framework::UITheme::forge_theme();
+
+        // Helper to color-code characteristics based on value
+        let char_color = |val: f32| -> Color {
+            if val >= 13.0 { theme.success }
+            else if val >= 10.0 { theme.text_primary }
+            else if val >= 7.0 { theme.warning }
+            else { theme.error }
+        };
+
+        let char_lines = vec![
+            framework::art::section_header("CHARACTERISTICS", area.width.saturating_sub(4) as usize, &theme),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("STR ", Style::default().fg(theme.text_secondary)),
+                Span::styled(format!("{:4.1}", character.characteristics.strength),
+                    Style::default().fg(char_color(character.characteristics.strength))),
+                Span::styled("  Strength", Style::default().fg(theme.text_muted)),
+            ]),
+            Line::from(vec![
+                Span::styled("STA ", Style::default().fg(theme.text_secondary)),
+                Span::styled(format!("{:4.1}", character.characteristics.stamina),
+                    Style::default().fg(char_color(character.characteristics.stamina))),
+                Span::styled("  Stamina", Style::default().fg(theme.text_muted)),
+            ]),
+            Line::from(vec![
+                Span::styled("INT ", Style::default().fg(theme.text_secondary)),
+                Span::styled(format!("{:4.1}", character.characteristics.intellect),
+                    Style::default().fg(char_color(character.characteristics.intellect))),
+                Span::styled("  Intellect", Style::default().fg(theme.text_muted)),
+            ]),
+            Line::from(vec![
+                Span::styled("INS ", Style::default().fg(theme.text_secondary)),
+                Span::styled(format!("{:4.1}", character.characteristics.insight),
+                    Style::default().fg(char_color(character.characteristics.insight))),
+                Span::styled("  Insight", Style::default().fg(theme.text_muted)),
+            ]),
+            Line::from(vec![
+                Span::styled("DEX ", Style::default().fg(theme.text_secondary)),
+                Span::styled(format!("{:4.1}", character.characteristics.dexterity),
+                    Style::default().fg(char_color(character.characteristics.dexterity))),
+                Span::styled("  Dexterity", Style::default().fg(theme.text_muted)),
+            ]),
+            Line::from(vec![
+                Span::styled("AWR ", Style::default().fg(theme.text_secondary)),
+                Span::styled(format!("{:4.1}", character.characteristics.awareness),
+                    Style::default().fg(char_color(character.characteristics.awareness))),
+                Span::styled("  Awareness", Style::default().fg(theme.text_muted)),
+            ]),
+            Line::from(vec![
+                Span::styled("SPD ", Style::default().fg(theme.text_secondary)),
+                Span::styled(format!("{:4}", character.characteristics.speed),
+                    Style::default().fg(theme.info)),
+                Span::styled("  Speed", Style::default().fg(theme.text_muted)),
+            ]),
+            Line::from(vec![
+                Span::styled("POW ", Style::default().fg(theme.text_secondary)),
+                Span::styled(format!("{:4}", character.characteristics.power),
+                    Style::default().fg(theme.sp_color)),
+                Span::styled("  Power", Style::default().fg(theme.text_muted)),
+            ]),
+            Line::from(vec![
+                Span::styled("LUC ", Style::default().fg(theme.text_secondary)),
+                Span::styled(format!("{:4}", character.characteristics.luck),
+                    Style::default().fg(theme.warning)),
+                Span::styled("  Luck", Style::default().fg(theme.text_muted)),
+            ]),
+        ];
+
+        let panel = Paragraph::new(char_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Characteristics")
+                .border_style(Style::default().fg(theme.border_primary)))
+            .style(Style::default().bg(theme.background));
+
+        f.render_widget(panel, area);
+    }
+
+    fn draw_race_abilities_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
+        let mut race_lines = vec![
+            Line::from(Span::styled("RACE & ABILITIES", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(format!("Race: {}", character.race.name)),
+            Line::from(""),
+            Line::from(character.race.description.clone()),
+            Line::from(""),
+            Line::from(Span::styled("Special Abilities:", Style::default().fg(Color::Magenta))),
+        ];
+
+        for ability in &character.race.special_abilities {
+            race_lines.push(Line::from(format!("• {}", ability)));
+        }
+
+        let panel = Paragraph::new(race_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Race & Abilities")
+                .border_style(Style::default().fg(Color::Magenta)))
+            .wrap(ratatui::widgets::Wrap { trim: true });
+        
+        f.render_widget(panel, area);
+    }
+
+    fn draw_combat_stats_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
+        let theme = framework::UITheme::forge_theme();
+
+        let hp_current = character.combat_stats.hit_points.current;
+        let hp_max = character.combat_stats.hit_points.max;
+        let sp_current = character.magic.spell_points.current;
+        let sp_max = character.magic.spell_points.max;
+
+        let mut combat_lines = vec![
+            framework::art::section_header("COMBAT", area.width.saturating_sub(4) as usize, &theme),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("❤ HP: ", Style::default().fg(theme.error)),
+                Span::styled(format!("{}/{}", hp_current, hp_max), Style::default()
+                    .fg(theme.text_primary)
+                    .add_modifier(Modifier::BOLD)),
+            ]),
+        ];
+
+        // HP bar
+        let hp_bar_width = area.width.saturating_sub(8).min(20) as usize;
+        combat_lines.push(Line::from(
+            framework::art::hp_bar_colored(hp_current, hp_max, hp_bar_width, &theme)
+        ));
+
+        combat_lines.push(Line::from(""));
+        combat_lines.push(Line::from(vec![
+            Span::styled("✨ SP: ", Style::default().fg(theme.sp_color)),
+            Span::styled(format!("{}/{}", sp_current, sp_max), Style::default()
+                .fg(theme.text_primary)
+                .add_modifier(Modifier::BOLD)),
+        ]));
+
+        // SP bar
+        let sp_bar = framework::art::progress_bar(sp_current, sp_max, hp_bar_width, '█', '░');
+        combat_lines.push(Line::from(Span::styled(sp_bar, Style::default().fg(theme.sp_color))));
+
+        combat_lines.push(Line::from(""));
+        combat_lines.push(Line::from(vec![
+            Span::styled("⚔ AV: ", Style::default().fg(theme.primary)),
+            Span::styled(format!("{}", character.combat_stats.attack_value), Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD)),
+            Span::styled("  🛡 DV: ", Style::default().fg(theme.info)),
+            Span::styled(format!("{}", character.combat_stats.defensive_value), Style::default()
+                .fg(theme.info)
+                .add_modifier(Modifier::BOLD)),
+        ]));
+
+        let dmg_color = if character.combat_stats.damage_bonus >= 0 { theme.success } else { theme.error };
+        combat_lines.push(Line::from(vec![
+            Span::styled("💥 DMG: ", Style::default().fg(theme.warning)),
+            Span::styled(format!("{:+}", character.combat_stats.damage_bonus), Style::default()
+                .fg(dmg_color)
+                .add_modifier(Modifier::BOLD)),
+        ]));
+
+        let panel = Paragraph::new(combat_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Combat Statistics")
+                .border_style(Style::default().fg(theme.border_primary)))
+            .style(Style::default().bg(theme.background));
+
+        f.render_widget(panel, area);
+    }
+
+    fn draw_derived_values_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
+        // Calculate derived values based on characteristics
+        let endurance = (character.characteristics.strength + character.characteristics.stamina) / 2.0;
+        let reflexes = (character.characteristics.dexterity + character.characteristics.awareness) / 2.0;
+        let will = (character.characteristics.intellect + character.characteristics.insight) / 2.0;
+        
+        let derived_lines = vec![
+            Line::from(Span::styled("DERIVED VALUES", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(format!("Endurance:  {:.1}", endurance)),
+            Line::from(format!("Reflexes:   {:.1}", reflexes)),
+            Line::from(format!("Will:       {:.1}", will)),
+            Line::from(format!("Vision:     {}", character.vision_radius)),
+        ];
+
+        let panel = Paragraph::new(derived_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Derived Values")
+                .border_style(Style::default().fg(Color::Blue)));
+        
+        f.render_widget(panel, area);
+    }
+
+    fn draw_character_skills_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
+        let (basic_skills, percentile_skills, combat_skills, magic_skills) = character.get_skills_by_category();
+        
+        let mut skill_lines = vec![
+            Line::from(Span::styled("SKILLS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+        ];
+
+        // Basic Skills Section
+        if !basic_skills.is_empty() {
+            skill_lines.push(Line::from(Span::styled("Basic Skills:", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))));
+            for (name, value, is_trained) in &basic_skills {
+                let display_name = if *is_trained {
+                    format!("✓ {}: {}%", name, value)
+                } else {
+                    format!("○ {}: {}% (untrained)", name, value)
+                };
+                let style = if *is_trained {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                skill_lines.push(Line::from(Span::styled(display_name, style)));
+            }
+            skill_lines.push(Line::from(""));
+        }
+
+        // Percentile Skills Section
+        if !percentile_skills.is_empty() {
+            skill_lines.push(Line::from(Span::styled("Percentile Skills:", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))));
+            for (name, value, is_trained) in &percentile_skills {
+                let display_name = if *is_trained {
+                    format!("✓ {}: {}%", name, value)
+                } else {
+                    format!("○ {}: {}% (untrained)", name, value)
+                };
+                let style = if *is_trained {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                skill_lines.push(Line::from(Span::styled(display_name, style)));
+            }
+            skill_lines.push(Line::from(""));
+        }
+
+        // Combat Skills Section
+        if !combat_skills.is_empty() {
+            skill_lines.push(Line::from(Span::styled("Combat Skills:", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))));
+            for (name, value, is_trained) in &combat_skills {
+                let display_name = if *is_trained {
+                    if let Some((level, percentage)) = character.combat_skills.get(name) {
+                        if *level > 0 {
+                            format!("✓ {}: {}% (Level {})", name, percentage, level)
+                        } else {
+                            format!("✓ {}: {}%", name, percentage)
+                        }
+                    } else {
+                        format!("✓ {}: {}%", name, value)
+                    }
+                } else {
+                    format!("○ {}: {}% (WSL 0, untrained)", name, value)
+                };
+                let style = if *is_trained {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                skill_lines.push(Line::from(Span::styled(display_name, style)));
+            }
+            skill_lines.push(Line::from(""));
+        }
+
+        // Magic Skills Section (brief, detailed info in magic panel)
+        if !magic_skills.is_empty() {
+            skill_lines.push(Line::from(Span::styled("Magic Skills:", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))));
+            for (name, value, is_trained) in &magic_skills {
+                let display_name = if *is_trained {
+                    format!("✓ {}: {}%", name, value)
+                } else {
+                    format!("○ {}: {}% (untrained)", name, value)
+                };
+                let style = if *is_trained {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                skill_lines.push(Line::from(Span::styled(display_name, style)));
+            }
+        }
+
+        let panel = Paragraph::new(skill_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Skills (✓ Trained | ○ Untrained)")
+                .border_style(Style::default().fg(Color::Green)));
+        
+        f.render_widget(panel, area);
+    }
+
+    fn draw_magic_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
+        let mut magic_lines = vec![
+            Line::from(Span::styled("MAGIC", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(format!("Spell Points: {}/{}", character.magic.spell_points.current, character.magic.spell_points.max)),
+            Line::from(""),
+        ];
+
+        // Show magic schools
+        if !character.magic.school_skills.is_empty() {
+            magic_lines.push(Line::from(Span::styled("Magic Schools:", Style::default().fg(Color::Magenta))));
+            for (school, level) in &character.magic.school_skills {
+                magic_lines.push(Line::from(format!("{}: {}", school, level)));
+            }
+            magic_lines.push(Line::from(""));
+        }
+
+        // Show known spells
+        if !character.magic.known_spells.is_empty() {
+            magic_lines.push(Line::from(Span::styled("Known Spells:", Style::default().fg(Color::Cyan))));
+            for (school, spells) in &character.magic.known_spells {
+                magic_lines.push(Line::from(format!("{}:", school)));
+                for spell in spells {
+                    magic_lines.push(Line::from(format!("  • {}", spell)));
+                }
+            }
+        } else {
+            magic_lines.push(Line::from("No spells known"));
+        }
+
+        let panel = Paragraph::new(magic_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Magic")
+                .border_style(Style::default().fg(Color::Magenta)))
+            .wrap(ratatui::widgets::Wrap { trim: true });
+        
+        f.render_widget(panel, area);
+    }
+
+    fn draw_equipment_sheet_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
+        let mut equipment_lines = vec![
+            Line::from(Span::styled("EQUIPMENT", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+        ];
+
+        // Weapon
+        if let Some(weapon) = &character.equipment.weapon {
+            equipment_lines.push(Line::from(format!("⚔️ Weapon: {}", weapon.name)));
+            equipment_lines.push(Line::from(format!("   Damage: {} (+{})", weapon.damage_dice, weapon.damage_bonus)));
+        } else {
+            equipment_lines.push(Line::from("⚔️ Weapon: None"));
+        }
+
+        // Armor
+        if let Some(armor) = &character.equipment.armor {
+            equipment_lines.push(Line::from(format!("🛡️ Armor: {}", armor.name)));
+            equipment_lines.push(Line::from(format!("   Rating: {}", armor.armor_rating)));
+        } else {
+            equipment_lines.push(Line::from("🛡️ Armor: None"));
+        }
+
+        // Shield
+        if let Some(shield) = &character.equipment.shield {
+            equipment_lines.push(Line::from(format!("🔰 Shield: {}", shield.name)));
+        } else {
+            equipment_lines.push(Line::from("🔰 Shield: None"));
+        }
+
+        // Accessories
+        equipment_lines.push(Line::from(format!("💍 Accessory 1: {}", 
+            character.equipment.accessory1.as_ref().map_or("None".to_string(), |a| a.name.clone()))));
+        equipment_lines.push(Line::from(format!("💍 Accessory 2: {}", 
+            character.equipment.accessory2.as_ref().map_or("None".to_string(), |a| a.name.clone()))));
+
+        let panel = Paragraph::new(equipment_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Equipment")
+                .border_style(Style::default().fg(Color::Blue)));
+        
+        f.render_widget(panel, area);
+    }
+
+    fn draw_movement_encumbrance_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
+        let current_weight: f32 = character.inventory.items.iter()
+            .map(|item| item.weight * item.quantity as f32)
+            .sum();
+        let weight_ratio = current_weight / character.inventory.max_weight;
+        
+        let encumbrance_status = if weight_ratio < 0.5 {
+            "Light"
+        } else if weight_ratio < 0.75 {
+            "Medium"
+        } else if weight_ratio < 1.0 {
+            "Heavy"
+        } else {
+            "Overloaded"
+        };
+
+        let movement_lines = vec![
+            Line::from(Span::styled("MOVEMENT", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(format!("Base Speed: {}", character.characteristics.speed)),
+            Line::from(format!("Encumbrance: {}", encumbrance_status)),
+            Line::from(format!("Weight: {:.1}/{:.1} kg", current_weight, character.inventory.max_weight)),
+            Line::from(format!("Penalty: {:+.1}%", character.inventory.weight_penalty)),
+        ];
+
+        let panel = Paragraph::new(movement_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Movement & Encumbrance")
+                .border_style(Style::default().fg(Color::Yellow)));
+        
+        f.render_widget(panel, area);
+    }
+
+    fn draw_inventory_sheet_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
+        let mut inventory_lines = vec![
+            Line::from(Span::styled("INVENTORY", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+        ];
+
+        if character.inventory.items.is_empty() {
+            inventory_lines.push(Line::from("No items"));
+        } else {
+            for item in &character.inventory.items {
+                let quantity_text = if item.quantity > 1 {
+                    format!(" ({})", item.quantity)
+                } else {
+                    String::new()
+                };
+                inventory_lines.push(Line::from(format!("• {}{}", item.name, quantity_text)));
+                if item.weight > 0.0 {
+                    inventory_lines.push(Line::from(format!("  {:.1} kg each", item.weight)));
+                }
+            }
+        }
+
+        let panel = Paragraph::new(inventory_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Inventory")
+                .border_style(Style::default().fg(Color::Green)))
+            .wrap(ratatui::widgets::Wrap { trim: true });
+        
+        f.render_widget(panel, area);
     }
 }

@@ -40,6 +40,25 @@ impl ModalSize {
     }
 }
 
+/// Border style presets for consistent visual hierarchy
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderStyle {
+    Single,
+    Double,
+    Rounded,
+    Thick,
+    None,
+}
+
+impl BorderStyle {
+    pub fn to_borders(&self) -> Borders {
+        match self {
+            BorderStyle::None => Borders::NONE,
+            _ => Borders::ALL,
+        }
+    }
+}
+
 /// Theme system for consistent styling
 #[derive(Debug, Clone)]
 pub struct UITheme {
@@ -50,26 +69,99 @@ pub struct UITheme {
     pub success: Color,
     pub warning: Color,
     pub error: Color,
+    pub info: Color,
     pub text_primary: Color,
     pub text_secondary: Color,
+    pub text_muted: Color,
+    pub text_highlight: Color,
     pub border_primary: Color,
     pub border_secondary: Color,
+    pub border_accent: Color,
+    pub hp_high: Color,
+    pub hp_medium: Color,
+    pub hp_low: Color,
+    pub sp_color: Color,
 }
 
 impl Default for UITheme {
     fn default() -> Self {
+        Self::forge_theme()
+    }
+}
+
+impl UITheme {
+    /// Forge-themed color palette (warm, mystical)
+    pub fn forge_theme() -> Self {
         Self {
             background: Color::Black,
-            primary: Color::Blue,
-            secondary: Color::Gray,
-            accent: Color::Yellow,
+            primary: Color::Rgb(255, 153, 0),      // Bright orange
+            secondary: Color::Rgb(102, 51, 0),     // Dark brown
+            accent: Color::Rgb(255, 215, 0),       // Gold
+            success: Color::Rgb(0, 255, 128),      // Bright green
+            warning: Color::Rgb(255, 165, 0),      // Orange
+            error: Color::Rgb(220, 20, 60),        // Crimson
+            info: Color::Rgb(100, 149, 237),       // Cornflower blue
+            text_primary: Color::Rgb(220, 220, 220), // Off-white
+            text_secondary: Color::Rgb(169, 169, 169), // Dark gray
+            text_muted: Color::Rgb(105, 105, 105),   // Dim gray
+            text_highlight: Color::Rgb(255, 255, 150), // Pale yellow
+            border_primary: Color::Rgb(184, 134, 11), // Dark goldenrod
+            border_secondary: Color::Rgb(139, 69, 19), // Saddle brown
+            border_accent: Color::Rgb(255, 215, 0),   // Gold
+            hp_high: Color::Rgb(0, 255, 128),      // Bright green
+            hp_medium: Color::Rgb(255, 215, 0),    // Gold
+            hp_low: Color::Rgb(255, 69, 0),        // Orange red
+            sp_color: Color::Rgb(138, 43, 226),    // Blue violet
+        }
+    }
+
+    /// Classic terminal theme (green on black)
+    pub fn classic_theme() -> Self {
+        Self {
+            background: Color::Black,
+            primary: Color::Green,
+            secondary: Color::DarkGray,
+            accent: Color::LightGreen,
             success: Color::Green,
             warning: Color::Yellow,
             error: Color::Red,
-            text_primary: Color::White,
-            text_secondary: Color::Gray,
-            border_primary: Color::White,
-            border_secondary: Color::Gray,
+            info: Color::Cyan,
+            text_primary: Color::Green,
+            text_secondary: Color::DarkGray,
+            text_muted: Color::Gray,
+            text_highlight: Color::LightGreen,
+            border_primary: Color::Green,
+            border_secondary: Color::DarkGray,
+            border_accent: Color::LightGreen,
+            hp_high: Color::Green,
+            hp_medium: Color::Yellow,
+            hp_low: Color::Red,
+            sp_color: Color::Cyan,
+        }
+    }
+
+    /// Dark blue theme (fantasy RPG)
+    pub fn fantasy_theme() -> Self {
+        Self {
+            background: Color::Black,
+            primary: Color::Rgb(70, 130, 180),     // Steel blue
+            secondary: Color::Rgb(47, 79, 79),     // Dark slate gray
+            accent: Color::Rgb(135, 206, 250),     // Light sky blue
+            success: Color::Rgb(50, 205, 50),      // Lime green
+            warning: Color::Rgb(255, 215, 0),      // Gold
+            error: Color::Rgb(178, 34, 34),        // Firebrick
+            info: Color::Rgb(173, 216, 230),       // Light blue
+            text_primary: Color::Rgb(230, 230, 250), // Lavender
+            text_secondary: Color::Rgb(176, 196, 222), // Light steel blue
+            text_muted: Color::Rgb(119, 136, 153),   // Light slate gray
+            text_highlight: Color::Rgb(255, 250, 205), // Lemon chiffon
+            border_primary: Color::Rgb(106, 90, 205), // Slate blue
+            border_secondary: Color::Rgb(72, 61, 139), // Dark slate blue
+            border_accent: Color::Rgb(147, 112, 219), // Medium purple
+            hp_high: Color::Rgb(50, 205, 50),      // Lime green
+            hp_medium: Color::Rgb(255, 215, 0),    // Gold
+            hp_low: Color::Rgb(220, 20, 60),       // Crimson
+            sp_color: Color::Rgb(138, 43, 226),    // Blue violet
         }
     }
 }
@@ -493,5 +585,153 @@ pub mod helpers {
             .with_title(title)
             .with_content(info_lines)
             .with_border_style(Style::default().fg(Color::Blue))
+    }
+}
+
+/// ASCII art and visual decorations
+pub mod art {
+    use super::*;
+
+    /// Generate a horizontal divider line
+    pub fn divider(width: usize, style: DividerStyle) -> String {
+        let char = match style {
+            DividerStyle::Single => "─",
+            DividerStyle::Double => "═",
+            DividerStyle::Heavy => "━",
+            DividerStyle::Dots => "·",
+            DividerStyle::Dashes => "-",
+        };
+        char.repeat(width)
+    }
+
+    /// Divider style options
+    pub enum DividerStyle {
+        Single,
+        Double,
+        Heavy,
+        Dots,
+        Dashes,
+    }
+
+    /// Create a fancy section header
+    pub fn section_header(text: &str, width: usize, theme: &UITheme) -> Line<'static> {
+        let text_len = text.len();
+        let padding = (width.saturating_sub(text_len).saturating_sub(4)) / 2;
+        let left_pad = "═".repeat(padding);
+        let right_pad = "═".repeat(padding);
+
+        Line::from(vec![
+            Span::styled(left_pad, Style::default().fg(theme.border_accent)),
+            Span::styled(" ", Style::default()),
+            Span::styled(text.to_string(), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(" ", Style::default()),
+            Span::styled(right_pad, Style::default().fg(theme.border_accent)),
+        ])
+    }
+
+    /// Create a progress bar
+    pub fn progress_bar(current: u32, max: u32, width: usize, filled_char: char, empty_char: char) -> String {
+        if max == 0 {
+            return empty_char.to_string().repeat(width);
+        }
+
+        let filled_width = ((current as f32 / max as f32) * width as f32) as usize;
+        let filled_width = filled_width.min(width);
+        let empty_width = width.saturating_sub(filled_width);
+
+        format!(
+            "{}{}",
+            filled_char.to_string().repeat(filled_width),
+            empty_char.to_string().repeat(empty_width)
+        )
+    }
+
+    /// Create an HP bar with color based on percentage
+    pub fn hp_bar_colored(current: u32, max: u32, width: usize, theme: &UITheme) -> Vec<Span<'static>> {
+        if max == 0 {
+            return vec![Span::styled("─".repeat(width), Style::default().fg(theme.text_muted))];
+        }
+
+        let percentage = (current as f32 / max as f32) * 100.0;
+        let color = if percentage >= 66.0 {
+            theme.hp_high
+        } else if percentage >= 33.0 {
+            theme.hp_medium
+        } else {
+            theme.hp_low
+        };
+
+        let bar = progress_bar(current, max, width, '█', '░');
+        vec![Span::styled(bar, Style::default().fg(color))]
+    }
+
+    /// Create boxed text with decorative borders
+    pub fn boxed_text(text: &str, style: BoxStyle) -> Vec<String> {
+        let lines: Vec<&str> = text.lines().collect();
+        let max_width = lines.iter().map(|l| l.len()).max().unwrap_or(0);
+
+        let (top_left, top_right, bottom_left, bottom_right, horizontal, vertical) = match style {
+            BoxStyle::Single => ("┌", "┐", "└", "┘", "─", "│"),
+            BoxStyle::Double => ("╔", "╗", "╚", "╝", "═", "║"),
+            BoxStyle::Rounded => ("╭", "╮", "╰", "╯", "─", "│"),
+            BoxStyle::Heavy => ("┏", "┓", "┗", "┛", "━", "┃"),
+        };
+
+        let mut result = Vec::new();
+        result.push(format!("{}{}{}", top_left, horizontal.repeat(max_width + 2), top_right));
+
+        for line in lines {
+            let padding = max_width - line.len();
+            result.push(format!("{} {}{} {}", vertical, line, " ".repeat(padding), vertical));
+        }
+
+        result.push(format!("{}{}{}", bottom_left, horizontal.repeat(max_width + 2), bottom_right));
+        result
+    }
+
+    pub enum BoxStyle {
+        Single,
+        Double,
+        Rounded,
+        Heavy,
+    }
+
+    /// Icon helpers for common game elements
+    pub mod icons {
+        pub const SWORD: &str = "⚔";
+        pub const SHIELD: &str = "🛡";
+        pub const BOW: &str = "🏹";
+        pub const WAND: &str = "🪄";
+        pub const POTION: &str = "🧪";
+        pub const SCROLL: &str = "📜";
+        pub const COIN: &str = "🪙";
+        pub const GEM: &str = "💎";
+        pub const HEART: &str = "❤";
+        pub const STAR: &str = "⭐";
+        pub const SKULL: &str = "💀";
+        pub const FIRE: &str = "🔥";
+        pub const ICE: &str = "❄";
+        pub const LIGHTNING: &str = "⚡";
+        pub const MAGIC: &str = "✨";
+        pub const LOCK: &str = "🔒";
+        pub const KEY: &str = "🔑";
+        pub const DOOR: &str = "🚪";
+        pub const CHEST: &str = "📦";
+        pub const BOOK: &str = "📖";
+        pub const MAP: &str = "🗺";
+        pub const COMPASS: &str = "🧭";
+        pub const SHIELD_ALT: &str = "🛡️";
+        pub const CROSSED_SWORDS: &str = "⚔️";
+        pub const WARNING: &str = "⚠";
+        pub const CHECK: &str = "✓";
+        pub const CROSS: &str = "✗";
+        pub const ARROW_UP: &str = "↑";
+        pub const ARROW_DOWN: &str = "↓";
+        pub const ARROW_LEFT: &str = "←";
+        pub const ARROW_RIGHT: &str = "→";
+        pub const BULLET: &str = "•";
+        pub const DIAMOND: &str = "◆";
+        pub const CIRCLE: &str = "◯";
+        pub const DOT: &str = "·";
     }
 }
