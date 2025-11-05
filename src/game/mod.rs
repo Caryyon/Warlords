@@ -5426,6 +5426,154 @@ impl Game {
         if let Some(participant) = tactical_state.get_current_participant() {
             tactical_state.add_log(format!("{}'s turn!", participant.base_participant.name));
         }
+
+        // Process AI turns automatically until it's a player's turn
+        self.process_ai_turns_until_player(tactical_state);
+    }
+
+    fn process_ai_turns_until_player(&mut self, tactical_state: &mut crate::ui::TacticalCombatState) {
+        // Keep processing AI turns until we reach a player or all participants are processed
+        let max_iterations = tactical_state.participants.len() * 2; // Safety limit
+        let mut iterations = 0;
+
+        while iterations < max_iterations {
+            if let Some(current_participant) = tactical_state.get_current_participant() {
+                // If it's a player's turn, stop and return control
+                if current_participant.base_participant.is_player {
+                    break;
+                }
+
+                // If participant is dead, skip their turn
+                if current_participant.base_participant.combat_stats.hit_points.current == 0 {
+                    tactical_state.add_log(format!("{} is defeated and cannot act.", current_participant.base_participant.name));
+
+                    // Advance to next turn
+                    tactical_state.current_turn_index = (tactical_state.current_turn_index + 1) % tactical_state.initiative_order.len();
+                    if tactical_state.current_turn_index == 0 {
+                        tactical_state.round_number += 1;
+                        tactical_state.add_log(format!("=== ROUND {} ===", tactical_state.round_number));
+                    }
+                    if let Some(participant) = tactical_state.get_current_participant() {
+                        tactical_state.add_log(format!("{}'s turn!", participant.base_participant.name));
+                    }
+                    iterations += 1;
+                    continue;
+                }
+
+                // Execute AI turn
+                self.execute_ai_turn(tactical_state);
+            } else {
+                break;
+            }
+
+            iterations += 1;
+        }
+    }
+
+    fn execute_ai_turn(&mut self, tactical_state: &mut crate::ui::TacticalCombatState) {
+        let current_idx = tactical_state.initiative_order[tactical_state.current_turn_index].0;
+
+        // Find the player's position and index
+        let player_info: Option<(usize, crate::forge::BattlefieldPosition)> = tactical_state.participants
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p.base_participant.is_player && p.base_participant.combat_stats.hit_points.current > 0)
+            .and_then(|(idx, _)| {
+                tactical_state.battlefield.participant_positions.get(&idx)
+                    .map(|pos| (idx, pos.clone()))
+            });
+
+        if let Some((player_idx, player_pos)) = player_info {
+            // Get AI position
+            let ai_pos = tactical_state.battlefield.participant_positions.get(&current_idx).cloned();
+
+            if let Some(ai_position) = ai_pos {
+                // Calculate distance to player
+                let dx = (player_pos.x - ai_position.x).abs();
+                let dy = (player_pos.y - ai_position.y).abs();
+                let distance = dx + dy; // Manhattan distance
+
+                // If player is adjacent (distance 1), attack them
+                if distance <= 1 {
+                    // Execute attack on player
+                    self.execute_ai_attack(tactical_state, current_idx, player_idx);
+                } else {
+                    // For now, AI just passes if not in range
+                    // TODO: Add AI movement in next iteration
+                    let ai_name = tactical_state.participants[current_idx].base_participant.name.clone();
+                    tactical_state.add_log(format!("{} is too far to attack (distance: {}) and passes.", ai_name, distance));
+                }
+            }
+        } else {
+            // No valid player target
+            let ai_name = tactical_state.participants[current_idx].base_participant.name.clone();
+            tactical_state.add_log(format!("{} has no valid targets and passes.", ai_name));
+        }
+
+        // Advance to next turn (without triggering recursive AI processing)
+        tactical_state.current_turn_index = (tactical_state.current_turn_index + 1) % tactical_state.initiative_order.len();
+        if tactical_state.current_turn_index == 0 {
+            tactical_state.round_number += 1;
+            tactical_state.add_log(format!("=== ROUND {} ===", tactical_state.round_number));
+        }
+        if let Some(participant) = tactical_state.get_current_participant() {
+            tactical_state.add_log(format!("{}'s turn!", participant.base_participant.name));
+        }
+    }
+
+    fn execute_ai_attack(&mut self, tactical_state: &mut crate::ui::TacticalCombatState, attacker_idx: usize, target_idx: usize) {
+        use rand::Rng;
+
+        // Extract all data we need before any mutable borrows
+        let attacker_name;
+        let defender_name;
+        let attack_value;
+        let defensive_value;
+        let has_weapon;
+        let damage_bonus;
+
+        {
+            let attacker = &tactical_state.participants[attacker_idx];
+            let defender = &tactical_state.participants[target_idx];
+
+            attacker_name = attacker.base_participant.name.clone();
+            defender_name = defender.base_participant.name.clone();
+            attack_value = attacker.base_participant.combat_stats.attack_value;
+            defensive_value = defender.base_participant.combat_stats.defensive_value;
+            has_weapon = attacker.base_participant.weapon.is_some();
+            damage_bonus = attacker.base_participant.combat_stats.damage_bonus;
+        }
+
+        // Roll attack
+        let mut rng = rand::thread_rng();
+        let attack_roll = rng.gen_range(1..=20);
+        let total_attack = attack_roll + attack_value as i32;
+
+        tactical_state.add_log(format!("{} attacks {}! (Roll: {}, Total: {})",
+            attacker_name, defender_name, attack_roll, total_attack));
+
+        if total_attack >= defensive_value as i32 {
+            // Hit! Calculate damage
+            let base_damage = if has_weapon { 8 } else { 4 }; // d8 or d4
+            let damage_roll = rng.gen_range(1..=base_damage);
+            let total_damage = (damage_roll as i32 + damage_bonus as i32).max(1) as u32;
+
+            // Apply damage
+            let defender = &mut tactical_state.participants[target_idx];
+            let old_hp = defender.base_participant.combat_stats.hit_points.current;
+            defender.base_participant.combat_stats.hit_points.current =
+                defender.base_participant.combat_stats.hit_points.current.saturating_sub(total_damage);
+            let new_hp = defender.base_participant.combat_stats.hit_points.current;
+
+            tactical_state.add_log(format!("HIT! {} damage dealt! ({} HP -> {} HP)",
+                total_damage, old_hp, new_hp));
+
+            if new_hp == 0 {
+                tactical_state.add_log(format!("{} has been defeated!", defender_name));
+            }
+        } else {
+            tactical_state.add_log(format!("MISS! (Needed {} to hit)", defensive_value));
+        }
     }
 
     fn get_compatible_items_static(character: &crate::forge::ForgeCharacter, slot: &crate::ui::EquipmentSlot) -> Vec<crate::forge::InventoryItem> {
