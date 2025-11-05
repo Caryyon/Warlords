@@ -5168,8 +5168,11 @@ impl Game {
                 // End turn
                 tactical_state.add_log("Ending turn...".to_string());
                 tactical_state.pending_action = None;
-                self.advance_turn(&mut tactical_state);
-                self.state = UIState::TacticalCombat(tactical_state);
+                if let Some(new_state) = self.advance_turn(&mut tactical_state) {
+                    self.state = new_state;
+                } else {
+                    self.state = UIState::TacticalCombat(tactical_state);
+                }
             }
 
             // Enter key - confirm selection or execute command
@@ -5195,7 +5198,10 @@ impl Game {
                         "end" | "e" => {
                             tactical_state.add_log("Ending turn...".to_string());
                             tactical_state.pending_action = None;
-                            self.advance_turn(&mut tactical_state);
+                            if let Some(new_state) = self.advance_turn(&mut tactical_state) {
+                                self.state = new_state;
+                                return Ok(());
+                            }
                         }
                         "help" => {
                             tactical_state.add_log("Commands: attack, move, defend, end, quit".to_string());
@@ -5338,9 +5344,18 @@ impl Game {
                         tactical_state.add_log(format!("MISS! (Needed {} to hit)", defensive_value));
                     }
 
+                    // Check for victory/defeat conditions
+                    if let Some(new_state) = self.check_tactical_combat_end(&tactical_state) {
+                        self.state = new_state;
+                        return Ok(());
+                    }
+
                     // Clear pending action and advance turn
                     tactical_state.pending_action = None;
-                    self.advance_turn(tactical_state);
+                    if let Some(new_state) = self.advance_turn(tactical_state) {
+                        self.state = new_state;
+                        return Ok(());
+                    }
                 } else {
                     tactical_state.add_log("No valid target at cursor position!".to_string());
                 }
@@ -5393,7 +5408,10 @@ impl Game {
 
                             // Clear pending action and advance turn
                             tactical_state.pending_action = None;
-                            self.advance_turn(tactical_state);
+                            if let Some(new_state) = self.advance_turn(tactical_state) {
+                                self.state = new_state;
+                                return Ok(());
+                            }
                         }
                     }
                 } else {
@@ -5409,7 +5427,10 @@ impl Game {
 
                 // Clear pending action and advance turn
                 tactical_state.pending_action = None;
-                self.advance_turn(tactical_state);
+                if let Some(new_state) = self.advance_turn(tactical_state) {
+                    self.state = new_state;
+                    return Ok(());
+                }
             }
 
             Some(crate::ui::PendingAction::CastSpell { .. }) => {
@@ -5428,7 +5449,46 @@ impl Game {
         Ok(())
     }
 
-    fn advance_turn(&mut self, tactical_state: &mut crate::ui::TacticalCombatState) {
+    fn check_tactical_combat_end(&self, tactical_state: &crate::ui::TacticalCombatState) -> Option<UIState> {
+        // Check if player is defeated
+        let player_alive = tactical_state.participants.iter()
+            .any(|p| p.base_participant.is_player && p.base_participant.combat_stats.hit_points.current > 0);
+
+        if !player_alive {
+            // Player defeated - return to character selection
+            println!("\n=== DEFEAT ===");
+            println!("You have been defeated in combat!");
+            println!("Returning to character selection...");
+
+            // TODO: Implement proper defeat handling (respawn, game over, restore HP, etc.)
+            return Some(UIState::MainMenu);
+        }
+
+        // Check if all enemies are defeated
+        let enemies_alive = tactical_state.participants.iter()
+            .any(|p| !p.base_participant.is_player && p.base_participant.combat_stats.hit_points.current > 0);
+
+        if !enemies_alive {
+            // Victory! Return to previous state if available
+            println!("\n=== VICTORY ===");
+            println!("All enemies have been defeated!");
+
+            if let Some(dungeon_state) = &tactical_state.return_to_dungeon {
+                // Return to dungeon exploration
+                println!("Returning to dungeon exploration...");
+                return Some(UIState::DungeonExploration(dungeon_state.clone()));
+            } else {
+                // No previous state - return to main menu with victory message
+                println!("Returning to main menu...");
+                return Some(UIState::MainMenu);
+            }
+        }
+
+        // Combat continues
+        None
+    }
+
+    fn advance_turn(&mut self, tactical_state: &mut crate::ui::TacticalCombatState) -> Option<UIState> {
         // Advance to next participant
         tactical_state.current_turn_index = (tactical_state.current_turn_index + 1) % tactical_state.initiative_order.len();
 
@@ -5444,15 +5504,21 @@ impl Game {
         }
 
         // Process AI turns automatically until it's a player's turn
-        self.process_ai_turns_until_player(tactical_state);
+        // This may return a combat end state
+        self.process_ai_turns_until_player(tactical_state)
     }
 
-    fn process_ai_turns_until_player(&mut self, tactical_state: &mut crate::ui::TacticalCombatState) {
+    fn process_ai_turns_until_player(&mut self, tactical_state: &mut crate::ui::TacticalCombatState) -> Option<UIState> {
         // Keep processing AI turns until we reach a player or all participants are processed
         let max_iterations = tactical_state.participants.len() * 2; // Safety limit
         let mut iterations = 0;
 
         while iterations < max_iterations {
+            // Check if combat has ended
+            if let Some(new_state) = self.check_tactical_combat_end(tactical_state) {
+                return Some(new_state);
+            }
+
             if let Some(current_participant) = tactical_state.get_current_participant() {
                 // If it's a player's turn, stop and return control
                 if current_participant.base_participant.is_player {
@@ -5484,6 +5550,8 @@ impl Game {
 
             iterations += 1;
         }
+
+        None
     }
 
     fn execute_ai_turn(&mut self, tactical_state: &mut crate::ui::TacticalCombatState) {
@@ -5584,6 +5652,9 @@ impl Game {
 
             if new_hp == 0 {
                 tactical_state.add_log(format!("{} has been defeated!", defender_name));
+
+                // Check for victory/defeat after AI defeats player
+                // This is handled in process_ai_turns_until_player which checks before each turn
             }
         } else {
             tactical_state.add_log(format!("MISS! (Needed {} to hit)", defensive_value));
