@@ -9,11 +9,12 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Style, Modifier},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, List, ListItem, Clear},
+    widgets::{Block, Borders, Paragraph, List, ListItem, Wrap},
     Frame, Terminal,
 };
 use std::io::{self, Stdout};
 use crate::forge::{RolledCharacteristics, ForgeRace};
+use rand::Rng;
 
 pub mod framework;
 pub mod layout;
@@ -58,8 +59,6 @@ pub struct DungeonExplorationState {
     pub player_pos: crate::world::LocalCoord,
     pub messages: Vec<String>,
     pub turn_count: u32,
-    // Tactical combat integration - when Some, combat is active in this dungeon
-    pub active_tactical_combat: Option<Box<TacticalCombatState>>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,32 +73,26 @@ pub struct CombatState {
     pub skill_list_offset: usize, // For scrolling through long lists
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CombatPhase {
-    // Legacy phases (for backwards compatibility)
-    InitiativeRoll,        // Rolling initiative for all participants
-    DeclaringActions,      // All participants declare their actions
-    SelectingSkill,        // Player selecting skill/spell/action
-    SelectingTarget,       // Player selecting target for action
-    ResolvingActions,      // Executing all declared actions
-    RoundComplete,         // Round finished, preparing for next
+    // D&D-style turn-based combat (NEW)
+    ShowingInitiative,     // Display initiative rolls popup (press Enter to continue)
+    PlayerTurn,            // Player's turn - can move and take action freely
+    PlayerMovement,        // Player can move with arrow keys before opening action menu
+    ResolvingAction,       // Executing a confirmed action
+    AITurn,                // AI taking its turn
     CombatComplete(bool),  // Combat over, true if player won
-    
-    // Tactical combat phases (temporary - to be replaced by Forge system)
-    TacticalMovement,      // Player can move around the battlefield
-    TacticalActionSelection, // Choose what action to take (attack, spell, item, etc.)
-    TacticalTargeting,     // Select target position or enemy for the action
-    TacticalActionConfirmation, // Confirm the selected action before executing
-    TacticalEnvironmentalInteraction, // Interact with environmental features
-    
-    // Forge-compliant Combat Minute phases
-    ForgeInitiativeRoll,   // Roll 1d6 initiative each combat minute
-    ForgePositioning,      // Determine participant positions relative to each other
-    ForgeCombatValueCalc,  // Calculate AV/DV1/DV2 for all participants
-    ForgeActionDeclaration, // Each participant declares their action for this minute
-    ForgeActionResolution, // Execute actions in initiative order
-    ForgeRecalculation,    // Update combat values based on damage/effects
-    ForgeCombatMinuteEnd,  // Check for combat end, advance to next minute
+
+    // Legacy phases (for backwards compatibility with existing combat code)
+    InitiativeRoll,
+    DeclaringActions,
+    SelectingSkill,
+    SelectingTarget,
+    ResolvingActions,
+    RoundComplete,
+    PlayerSelectingAction,
+    PlayerTargeting,
+    ExecutingPlayerAction,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -134,492 +127,37 @@ pub struct CombatPanelSelections {
     pub spell_details_index: usize,
 }
 
+// New simplified tactical combat state for redesigned UI
 #[derive(Debug, Clone)]
 pub struct TacticalCombatState {
+    // Core combat data
     pub battlefield: crate::forge::TacticalBattlefield,
     pub participants: Vec<crate::forge::TacticalCombatParticipant>,
-    pub current_participant_index: usize,
-    pub round: u32,
-    pub combat_phase: CombatPhase,
-    pub combat_log: Vec<String>,
-    
-    // UI state for tactical combat
-    pub cursor_position: crate::forge::BattlefieldPosition, // Where the player's cursor is
-    pub highlighted_positions: Vec<crate::forge::BattlefieldPosition>, // Show movement range, spell AoE, etc.
-    pub selected_action: Option<crate::forge::TacticalCombatAction>,
-    pub available_targets: Vec<usize>,  // Valid target participant IDs
-    pub available_positions: Vec<crate::forge::BattlefieldPosition>, // Valid target positions
-    
-    // Action selection state
-    pub action_menu_open: bool,
-    pub selected_action_index: usize,
-    pub available_actions: Vec<String>,
-    pub inventory_menu_open: bool,
-    
-    // New panel-based navigation
-    pub active_panel: CombatPanel,
-    pub panel_selections: CombatPanelSelections,
-    pub navigation_mode: NavigationMode,
-    
-    // Spell selection state
-    pub spell_menu_open: bool,
-    pub selected_spell_index: usize,
-    pub available_spells: Vec<(String, crate::forge::magic::Spell)>,
-    pub targeting_spell: Option<crate::forge::magic::Spell>,
-    pub valid_spell_targets: Vec<crate::forge::BattlefieldPosition>,
-    pub spell_effect_preview: Vec<crate::forge::BattlefieldPosition>,
-    
-    // Spell enhancement state
-    pub enhancement_menu_open: bool,
-    pub current_enhancement: crate::forge::magic::SpellEnhancement,
-    pub selected_enhancement_category: usize, // 0=range, 1=duration, 2=damage, 3=save, 4=success
-    pub enhancement_categories: Vec<String>,
-    
-    // Environmental interaction
-    pub available_environmental_features: Vec<crate::forge::EnvironmentalFeature>,
-    pub selected_feature_index: Option<usize>,
-    
-    // Forge-specific combat state
-    pub combat_minute: u32,           // Current combat minute (Forge term instead of "round")
-    pub initiative_order: Vec<(usize, u8)>, // (participant_index, initiative_roll) sorted by initiative
-    pub actions_declared: Vec<(usize, ForgeAction)>, // Actions declared for this minute
-    pub current_action_resolver: usize, // Which action we're currently resolving
-    pub prime_opponents: std::collections::HashMap<usize, usize>, // participant_id -> prime_opponent_id
-    
+    pub initiative_order: Vec<(usize, u8)>, // (participant_index, initiative_roll)
+    pub current_turn_index: usize,
+    pub round_number: u32,
+
+    // UI state
+    pub cursor_pos: (i32, i32), // Cursor position on battlefield
+    pub command_buffer: String, // MUD-style command input
+    pub combat_log: Vec<String>, // Scrollable combat log
+    pub log_scroll_offset: usize,
+
+    // Action state
+    pub pending_action: Option<PendingAction>,
+    pub available_targets: Vec<usize>, // Indices of valid targets for current action
+
     // Return state
-    pub return_to_dungeon: Option<Box<DungeonExplorationState>>,
+    pub return_to_dungeon: Option<DungeonExplorationState>,
 }
 
 #[derive(Debug, Clone)]
-pub enum ForgeAction {
-    // Core Forge combat actions
-    MeleeAttack {
-        target_id: usize,
-        weapon: Option<crate::forge::Weapon>,
-    },
-    MissileAttack {
-        target_id: usize,
-        weapon: Option<crate::forge::Weapon>,
-        position: crate::forge::BattlefieldPosition,
-    },
-    CastSpell {
-        spell: crate::forge::magic::Spell,
-        target_type: ForgeSpellTarget,
-    },
-    Defend {
-        prime_opponent: usize, // Who to focus defense on
-    },
-    Retreat {
-        direction: crate::forge::BattlefieldPosition, // Direction to flee
-    },
-    Wait, // Do nothing this combat minute
-    UseItem {
-        item_name: String,
-        target_id: Option<usize>,
-    },
-    SwitchWeapon {
-        new_weapon: Option<crate::forge::Weapon>,
-    },
-    EndTurn, // End turn without attacking - allows movement without requiring combat
-    MoveOnly, // Move to a position and end turn
-}
-
-#[derive(Debug, Clone)]
-pub enum ForgeSpellTarget {
-    Self_,
-    Participant(usize),
-    Position(crate::forge::BattlefieldPosition),
-    Area(crate::forge::BattlefieldPosition, u8), // center position, radius
-    AllEnemies,
-    AllAllies,
-}
-
-impl TacticalCombatState {
-    pub fn new(
-        battlefield: crate::forge::TacticalBattlefield,
-        participants: Vec<crate::forge::TacticalCombatParticipant>,
-        return_to_dungeon: Option<Box<DungeonExplorationState>>,
-    ) -> Self {
-        let cursor_position = crate::forge::BattlefieldPosition::new(
-            battlefield.width as i32 / 2,
-            battlefield.height as i32 / 2,
-        );
-        
-        Self {
-            battlefield,
-            participants,
-            current_participant_index: 0,
-            round: 1,
-            combat_phase: CombatPhase::TacticalMovement,
-            combat_log: vec![
-                "=== FORGE TACTICAL COMBAT BEGINS ===".to_string(),
-                "".to_string(),
-                "CONTROLS:".to_string(),
-                "• WASD/HJKL: Move cursor".to_string(),
-                "• ENTER: Move to position".to_string(),
-                "• Q: Quick action menu".to_string(),
-                "• E: End turn immediately".to_string(),
-                "• TAB: Open action menu".to_string(),
-                "".to_string(),
-                "TACTICS:".to_string(),
-                "• Use 'Move Only' to position without attacking".to_string(),
-                "• Cast buffs/use potions before engaging".to_string(),
-                "• Switch weapons mid-combat tactically".to_string(),
-                "".to_string(),
-            ],
-            
-            cursor_position,
-            highlighted_positions: Vec::new(),
-            selected_action: None,
-            available_targets: Vec::new(),
-            available_positions: Vec::new(),
-            
-            action_menu_open: false,
-            selected_action_index: 0,
-            available_actions: vec![
-                "Move Only".to_string(),
-                "Attack".to_string(),
-                "Cast Spell".to_string(),
-                "Use Item/Potion".to_string(),
-                "Switch Weapon".to_string(),
-                "Defend".to_string(),
-                "End Turn".to_string(),
-                "Interact".to_string(),
-            ],
-            inventory_menu_open: false,
-            
-            active_panel: CombatPanel::Battlefield,
-            panel_selections: CombatPanelSelections {
-                movement_index: 0,
-                combat_index: 0,
-                skills_index: 0,
-                character_info_index: 0,
-                target_info_index: 0,
-                skills_available_index: 0,
-                inventory_index: 0,
-                spell_details_index: 0,
-            },
-            navigation_mode: NavigationMode::WithinPanel,
-            
-            spell_menu_open: false,
-            selected_spell_index: 0,
-            available_spells: Vec::new(),
-            targeting_spell: None,
-            valid_spell_targets: Vec::new(),
-            spell_effect_preview: Vec::new(),
-            
-            enhancement_menu_open: false,
-            current_enhancement: crate::forge::magic::SpellEnhancement::default(),
-            selected_enhancement_category: 0,
-            enhancement_categories: vec![
-                "Range".to_string(),
-                "Duration".to_string(),
-                "Damage".to_string(),
-                "Save Modifier".to_string(),
-                "Success Chance".to_string(),
-            ],
-            
-            available_environmental_features: Vec::new(),
-            selected_feature_index: None,
-            
-            // Initialize Forge-specific combat state
-            combat_minute: 1,
-            initiative_order: Vec::new(),
-            actions_declared: Vec::new(),
-            current_action_resolver: 0,
-            prime_opponents: std::collections::HashMap::new(),
-            
-            return_to_dungeon,
-        }
-    }
-    
-    pub fn get_current_participant(&self) -> Option<&crate::forge::TacticalCombatParticipant> {
-        self.participants.get(self.current_participant_index)
-    }
-    
-    // Forge combat mechanics
-    pub fn roll_forge_initiative(&mut self) {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        
-        self.initiative_order.clear();
-        
-        // Roll 1d6 initiative for each participant
-        for (index, participant) in self.participants.iter().enumerate() {
-            let initiative_roll = rng.gen_range(1..=6);
-            self.initiative_order.push((index, initiative_roll));
-            
-            self.combat_log.push(format!(
-                "{} rolls {} for initiative", 
-                participant.base_participant.name, 
-                initiative_roll
-            ));
-        }
-        
-        // Sort by initiative (highest first)
-        self.initiative_order.sort_by(|a, b| b.1.cmp(&a.1));
-        
-        // Set current participant to highest initiative
-        if let Some((first_participant_index, _)) = self.initiative_order.first() {
-            self.current_participant_index = *first_participant_index;
-        }
-        
-        self.combat_log.push("=== Initiative Order ===".to_string());
-        for (index, (participant_index, initiative)) in self.initiative_order.iter().enumerate() {
-            if let Some(participant) = self.participants.get(*participant_index) {
-                self.combat_log.push(format!(
-                    "{}. {} (Initiative: {})", 
-                    index + 1, 
-                    participant.base_participant.name, 
-                    initiative
-                ));
-            }
-        }
-    }
-    
-    pub fn get_current_participant_mut(&mut self) -> Option<&mut crate::forge::TacticalCombatParticipant> {
-        self.participants.get_mut(self.current_participant_index)
-    }
-    
-    // Advance to next participant in initiative order
-    pub fn advance_to_next_participant(&mut self) -> bool {
-        // Find current participant in initiative order
-        let current_position = self.initiative_order
-            .iter()
-            .position(|(participant_index, _)| *participant_index == self.current_participant_index);
-            
-        if let Some(current_pos) = current_position {
-            if current_pos + 1 < self.initiative_order.len() {
-                // Move to next participant
-                let (next_participant_index, _) = self.initiative_order[current_pos + 1];
-                self.current_participant_index = next_participant_index;
-                true
-            } else {
-                // End of combat minute - return to first participant for next minute
-                self.advance_combat_minute()
-            }
-        } else {
-            false
-        }
-    }
-    
-    // Start new combat minute with fresh initiative
-    pub fn advance_combat_minute(&mut self) -> bool {
-        self.combat_minute += 1;
-        self.actions_declared.clear();
-        self.current_action_resolver = 0;
-        
-        self.combat_log.push(format!("=== COMBAT MINUTE {} ===", self.combat_minute));
-        
-        // Roll new initiative each combat minute (Forge rule)
-        self.roll_forge_initiative();
-        
-        // Reset to ForgeInitiativeRoll phase to handle new minute
-        self.combat_phase = CombatPhase::ForgeInitiativeRoll;
-        true
-    }
-    
-    // Set Prime Opponent for Forge defensive calculations
-    pub fn set_prime_opponent(&mut self, participant_id: usize, prime_opponent_id: usize) {
-        self.prime_opponents.insert(participant_id, prime_opponent_id);
-        
-        if let (Some(participant), Some(opponent)) = (
-            self.participants.get(participant_id),
-            self.participants.get(prime_opponent_id)
-        ) {
-            self.combat_log.push(format!(
-                "{} designates {} as Prime Opponent", 
-                participant.base_participant.name,
-                opponent.base_participant.name
-            ));
-        }
-    }
-    
-    // Get the Prime Opponent for a participant (affects DV calculations)
-    pub fn get_prime_opponent(&self, participant_id: usize) -> Option<usize> {
-        self.prime_opponents.get(&participant_id).copied()
-    }
-    
-    // Initialize Forge combat system
-    pub fn start_forge_combat(&mut self) {
-        self.combat_log.push("=== STARTING FORGE COMBAT SYSTEM ===".to_string());
-        self.combat_phase = CombatPhase::ForgeInitiativeRoll;
-        self.roll_forge_initiative();
-        
-        // Transition to action declaration phase
-        self.combat_phase = CombatPhase::ForgeActionDeclaration;
-        
-        if let Some(participant) = self.participants.get(self.current_participant_index) {
-            self.combat_log.push(format!(
-                "{} may declare their action for Combat Minute {}",
-                participant.base_participant.name,
-                self.combat_minute
-            ));
-        }
-    }
-    
-    pub fn add_log_message(&mut self, message: String) {
-        self.combat_log.push(message);
-        // Keep only the last 20 messages to prevent memory bloat
-        if self.combat_log.len() > 20 {
-            self.combat_log.remove(0);
-        }
-    }
-    
-    pub fn is_player_turn(&self) -> bool {
-        if let Some(participant) = self.get_current_participant() {
-            participant.base_participant.is_player
-        } else {
-            false
-        }
-    }
-    
-    pub fn next_participant(&mut self) {
-        self.current_participant_index = (self.current_participant_index + 1) % self.participants.len();
-        
-        // If we've cycled back to the first participant, increment round
-        if self.current_participant_index == 0 {
-            self.round += 1;
-            self.add_log_message(format!("=== ROUND {} ===", self.round));
-            
-            // Reset movement for all participants
-            for participant in &mut self.participants {
-                participant.movement_remaining = participant.movement_capabilities.movement_speed;
-                participant.has_acted = false;
-                participant.declared_action = None;
-            }
-        }
-        
-        // Reset combat phase for new participant
-        if self.is_player_turn() {
-            self.combat_phase = CombatPhase::TacticalMovement;
-            // Update movement highlights for player
-            self.update_movement_highlights();
-        } else {
-            // AI participants will be processed automatically by the game loop
-            self.combat_phase = CombatPhase::TacticalMovement;
-        }
-    }
-    
-    pub fn is_combat_over(&self) -> bool {
-        let alive_players = self.participants.iter()
-            .filter(|p| p.base_participant.is_player && p.base_participant.is_alive())
-            .count();
-        let alive_enemies = self.participants.iter()
-            .filter(|p| !p.base_participant.is_player && p.base_participant.is_alive())
-            .count();
-        
-        alive_players == 0 || alive_enemies == 0
-    }
-    
-    pub fn get_winner(&self) -> Option<String> {
-        if !self.is_combat_over() {
-            return None;
-        }
-        
-        let alive_players = self.participants.iter()
-            .filter(|p| p.base_participant.is_player && p.base_participant.is_alive())
-            .count();
-        
-        if alive_players > 0 {
-            Some("Player".to_string())
-        } else {
-            Some("Enemies".to_string())
-        }
-    }
-    
-    pub fn update_movement_highlights(&mut self) {
-        self.highlighted_positions.clear();
-        
-        if let Some(participant) = self.get_current_participant() {
-            let current_pos = participant.position;
-            let movement_remaining = participant.movement_remaining;
-            
-            // Calculate all positions within movement range
-            for x in (current_pos.x - movement_remaining as i32)..=(current_pos.x + movement_remaining as i32) {
-                for y in (current_pos.y - movement_remaining as i32)..=(current_pos.y + movement_remaining as i32) {
-                    let pos = crate::forge::BattlefieldPosition::new(x, y);
-                    
-                    if current_pos.manhattan_distance_to(&pos) <= movement_remaining as i32 {
-                        if self.battlefield.is_position_passable(&pos) {
-                            self.highlighted_positions.push(pos);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    pub fn update_targeting_highlights(&mut self, action: &crate::forge::TacticalCombatAction) {
-        self.highlighted_positions.clear();
-        self.available_targets.clear();
-        self.available_positions.clear();
-        
-        if let Some(participant) = self.get_current_participant() {
-            let participant_pos = participant.position;
-            
-            match action {
-                crate::forge::TacticalCombatAction::Attack { .. } => {
-                    // Highlight adjacent positions for melee attacks, or in range for ranged
-                    let weapon_range = if let Some(weapon) = &participant.base_participant.weapon {
-                        if weapon.ranged {
-                            weapon.range.unwrap_or(5) // Default ranged weapon range
-                        } else {
-                            1 // Melee range
-                        }
-                    } else {
-                        1 // Unarmed melee range
-                    };
-                    
-                    // Find all participants within range
-                    for (i, other_participant) in self.participants.iter().enumerate() {
-                        if i != self.current_participant_index && other_participant.base_participant.is_alive() {
-                            let distance = participant_pos.distance_to(&other_participant.position);
-                            if distance <= weapon_range as f32 {
-                                // Check line of sight for ranged attacks
-                                if weapon_range > 1 {
-                                    if self.battlefield.has_line_of_sight(&participant_pos, &other_participant.position) {
-                                        self.available_targets.push(i);
-                                        self.highlighted_positions.push(other_participant.position);
-                                    }
-                                } else {
-                                    // Melee attacks don't need line of sight
-                                    self.available_targets.push(i);
-                                    self.highlighted_positions.push(other_participant.position);
-                                }
-                            }
-                        }
-                    }
-                }
-                crate::forge::TacticalCombatAction::CastSpell { .. } => {
-                    // TODO: Implement spell targeting based on spell properties
-                    // For now, highlight all visible enemies within a reasonable range
-                    for (i, other_participant) in self.participants.iter().enumerate() {
-                        if i != self.current_participant_index && other_participant.base_participant.is_alive() {
-                            let distance = participant_pos.distance_to(&other_participant.position);
-                            if distance <= 10.0 { // Spell range
-                                if self.battlefield.has_line_of_sight(&participant_pos, &other_participant.position) {
-                                    self.available_targets.push(i);
-                                    self.highlighted_positions.push(other_participant.position);
-                                }
-                            }
-                        }
-                    }
-                }
-                crate::forge::TacticalCombatAction::Interact { .. } => {
-                    // Highlight environmental features within reach
-                    for feature in &self.battlefield.environmental_features {
-                        let distance = participant_pos.distance_to(&feature.position);
-                        if distance <= 1.5 { // Adjacent or diagonal
-                            self.highlighted_positions.push(feature.position);
-                            self.available_positions.push(feature.position);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
+pub enum PendingAction {
+    Attack { target_index: Option<usize> },
+    Move { destination: Option<(i32, i32)> },
+    CastSpell { spell_index: usize, target_index: Option<usize> },
+    UseItem { item_index: usize, target_index: Option<usize> },
+    Defend,
 }
 
 #[derive(Debug, Clone)]
@@ -781,6 +319,75 @@ impl InventoryState {
     }
 }
 
+impl TacticalCombatState {
+    pub fn new(
+        battlefield: crate::forge::TacticalBattlefield,
+        participants: Vec<crate::forge::TacticalCombatParticipant>,
+        return_to_dungeon: Option<DungeonExplorationState>,
+    ) -> Self {
+        // Roll initiative for all participants
+        let mut initiative_order: Vec<(usize, u8)> = participants
+            .iter()
+            .enumerate()
+            .map(|(idx, _p)| {
+                let roll = rand::thread_rng().gen_range(1..=20) as u8;
+                // TODO: Add initiative bonus once we have access to full character stats
+                (idx, roll)
+            })
+            .collect();
+
+        // Sort by initiative (highest first)
+        // TODO: Add dexterity tiebreaker once we have access to full character stats
+        initiative_order.sort_by(|a, b| b.1.cmp(&a.1));
+
+        // Initialize combat log
+        let mut combat_log = vec![
+            "=== COMBAT BEGINS ===".to_string(),
+            "Initiative Order:".to_string(),
+        ];
+        for (idx, init) in &initiative_order {
+            let p = &participants[*idx];
+            combat_log.push(format!("  {} ({})", p.base_participant.name, init));
+        }
+        combat_log.push("".to_string());
+
+        // Start cursor at first player position
+        let cursor_pos = if let Some(first_player_idx) = initiative_order.iter().find(|(idx, _)| participants[*idx].base_participant.is_player) {
+            battlefield.participant_positions.get(&first_player_idx.0)
+                .map(|pos| (pos.x, pos.y))
+                .unwrap_or((battlefield.width as i32 / 2, battlefield.height as i32 / 2))
+        } else {
+            (battlefield.width as i32 / 2, battlefield.height as i32 / 2)
+        };
+
+        Self {
+            battlefield,
+            participants,
+            initiative_order,
+            current_turn_index: 0,
+            round_number: 1,
+            cursor_pos,
+            command_buffer: String::new(),
+            combat_log,
+            log_scroll_offset: 0,
+            pending_action: None,
+            available_targets: Vec::new(),
+            return_to_dungeon,
+        }
+    }
+
+    pub fn get_current_participant(&self) -> Option<&crate::forge::TacticalCombatParticipant> {
+        let (participant_idx, _) = self.initiative_order.get(self.current_turn_index)?;
+        self.participants.get(*participant_idx)
+    }
+
+    pub fn add_log(&mut self, message: String) {
+        self.combat_log.push(message);
+        // Auto-scroll to bottom
+        self.log_scroll_offset = self.combat_log.len().saturating_sub(8);
+    }
+}
+
 impl GameUI {
     pub fn new() -> anyhow::Result<Self> {
         // Try to enable raw mode with better error handling
@@ -843,7 +450,7 @@ impl GameUI {
                         .alignment(Alignment::Center);
                     f.render_widget(error_text, f.size());
                 },
-                UIState::TacticalCombat(tactical_combat_state) => Self::draw_tactical_combat_static(f, tactical_combat_state),
+                UIState::TacticalCombat(tactical_state) => Self::draw_tactical_combat_static(f, tactical_state, character_clone.as_ref()),
             }
         })?;
         Ok(())
@@ -1079,19 +686,36 @@ impl GameUI {
                         Span::styled("1", Style::default()
                             .fg(theme.accent)
                             .add_modifier(Modifier::BOLD)),
-                        Span::styled(" • Login to Existing Character", Style::default()
+                        Span::styled(" • ", Style::default()
                             .fg(theme.text_primary)),
+                        Span::styled("Login to Existing Character", Style::default()
+                            .fg(theme.text_primary)
+                            .add_modifier(Modifier::BOLD)),
                     ]),
                 ]),
                 ListItem::new(vec![
                     Line::from(vec![
                         Span::styled("2", Style::default()
-                            .fg(theme.accent)
+                            .fg(theme.success)
                             .add_modifier(Modifier::BOLD)),
-                        Span::styled(" • Create New Character", Style::default()
-                            .fg(theme.text_primary)),
+                        Span::styled(" • ", Style::default()
+                            .fg(theme.success)),
+                        Span::styled("Create New Character", Style::default()
+                            .fg(theme.success)
+                            .add_modifier(Modifier::BOLD)),
+                        Span::styled(" ⭐", Style::default()
+                            .fg(theme.warning)),
                     ]),
                 ]),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled("    ", Style::default()),
+                        Span::styled("New to Warlords? Start here!", Style::default()
+                            .fg(theme.text_secondary)
+                            .add_modifier(Modifier::ITALIC)),
+                    ]),
+                ]),
+                ListItem::new(""),
                 ListItem::new(vec![
                     Line::from(vec![
                         Span::styled("3", Style::default()
@@ -2747,13 +2371,9 @@ impl GameUI {
 
     fn draw_dungeon_exploration_static(f: &mut Frame, dungeon_state: &DungeonExplorationState, current_character: Option<&crate::forge::ForgeCharacter>) {
         let area = f.size();
-        
-        // Check if tactical combat is active
-        if let Some(ref tactical_combat) = dungeon_state.active_tactical_combat {
-            // Use the new centered battlefield UI for tactical combat
-            Self::draw_tactical_combat_static(f, tactical_combat);
-            return;
-        }
+
+        // Tactical combat is now always standalone UIState::TacticalCombat
+        // No need to check for embedded combat here
         
         // Normal dungeon exploration layout
         // Main layout: 2/3 for dungeon view/status, 1/3 for messages
@@ -3061,8 +2681,382 @@ impl GameUI {
                 Line::from("Please wait while the dungeon data loads."),
             ];
         }
-        
+
         dungeon_content
+    }
+
+    fn draw_tactical_combat_static(f: &mut Frame, tactical_state: &TacticalCombatState, _current_character: Option<&crate::forge::ForgeCharacter>) {
+        let area = f.size();
+
+        // Main layout: Top 60% for battlefield area, Bottom 40% for log/actions/input
+        let main_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(60),  // Top: Battlefield + Initiative sidebar
+                Constraint::Percentage(40),  // Bottom: Combat log + Actions + Input
+            ])
+            .split(area);
+
+        // Top area: Split into battlefield (left 70%) and initiative sidebar (right 30%)
+        let top_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(70),  // Battlefield
+                Constraint::Percentage(30),  // Initiative + Quick Stats
+            ])
+            .split(main_chunks[0]);
+
+        // Bottom area: Combat log (8 lines), action bar (1 line), command input (1 line)
+        let bottom_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(8),        // Combat log (scrollable)
+                Constraint::Length(3),     // Action hotkey bar
+                Constraint::Length(3),     // Command input line
+            ])
+            .split(main_chunks[1]);
+
+        // === BATTLEFIELD PANEL (Top Left) ===
+        Self::draw_battlefield_panel(f, top_chunks[0], tactical_state);
+
+        // === INITIATIVE SIDEBAR (Top Right) ===
+        Self::draw_initiative_sidebar_panel(f, top_chunks[1], tactical_state);
+
+        // === COMBAT LOG (Bottom Top) ===
+        Self::draw_combat_log_panel(f, bottom_chunks[0], tactical_state);
+
+        // === ACTION HOTKEY BAR (Bottom Middle) ===
+        Self::draw_action_hotkey_bar(f, bottom_chunks[1], tactical_state);
+
+        // === COMMAND INPUT (Bottom Bottom) ===
+        Self::draw_command_input_panel(f, bottom_chunks[2], tactical_state);
+    }
+
+    fn draw_battlefield_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_state: &TacticalCombatState) {
+        let battlefield = &tactical_state.battlefield;
+        let cursor_pos = tactical_state.cursor_pos;
+
+        // Calculate the available area inside borders
+        let available_height = area.height.saturating_sub(2) as i32; // Subtract borders
+        let available_width = area.width.saturating_sub(2) as i32; // Subtract borders
+
+        // Calculate battlefield dimensions
+        let battlefield_width = battlefield.width as i32;
+        let battlefield_height = battlefield.height as i32;
+
+        // Calculate padding to center the battlefield
+        let pad_top = ((available_height - battlefield_height) / 2).max(0);
+        let pad_left = ((available_width - battlefield_width) / 2).max(0);
+
+        // Generate battlefield view with centering
+        let mut battlefield_lines = Vec::new();
+
+        // Add top padding
+        for _ in 0..pad_top {
+            battlefield_lines.push(Line::from(" ".repeat(available_width as usize)));
+        }
+
+        // Render battlefield rows
+        for y in 0..battlefield_height {
+            let mut line_spans = Vec::new();
+
+            // Add left padding
+            for _ in 0..pad_left {
+                line_spans.push(Span::raw(" "));
+            }
+
+            // Render battlefield columns
+            for x in 0..battlefield_width {
+                // Check if cursor is at this position
+                if x == cursor_pos.0 && y == cursor_pos.1 {
+                    // Show cursor
+                    line_spans.push(Span::styled("X", Style::default().fg(Color::White).add_modifier(Modifier::BOLD | Modifier::REVERSED)));
+                } else {
+                    // Check if a participant is at this position
+                    let participant_at_pos = tactical_state.participants.iter().enumerate().find(|(idx, _)| {
+                        battlefield.participant_positions.get(idx)
+                            .map(|pos| pos.x == x && pos.y == y)
+                            .unwrap_or(false)
+                    });
+
+                    if let Some((idx, participant)) = participant_at_pos {
+                        // Render participant
+                        let symbol = if participant.base_participant.is_player {
+                            // Player: Use number (1, 2, 3...) colored by class
+                            let player_num = tactical_state.participants.iter()
+                                .enumerate()
+                                .filter(|(_, p)| p.base_participant.is_player)
+                                .position(|(i, _)| i == idx)
+                                .unwrap_or(0) + 1;
+
+                            // Color by class (for now, use cyan for all players)
+                            Span::styled(
+                                player_num.to_string(),
+                                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                            )
+                        } else {
+                            // Enemy: Use first letter of name, colored by difficulty tier
+                            let first_letter = participant.base_participant.name.chars().next().unwrap_or('?');
+
+                            // Difficulty tier color (gray → light green → blue → yellow → orange → red → purple)
+                            // For now, use red for enemies (TODO: Calculate based on level comparison)
+                            Span::styled(
+                                first_letter.to_string(),
+                                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                            )
+                        };
+
+                        line_spans.push(symbol);
+                    } else {
+                        // Empty tile - check terrain
+                        let position = crate::forge::BattlefieldPosition::new(x, y);
+                        let terrain = battlefield.tiles.get(&position)
+                            .map(|tile| tile.terrain.clone())
+                            .unwrap_or(crate::forge::TerrainFeature::Open);
+
+                        let (symbol, color) = match terrain {
+                            crate::forge::TerrainFeature::Open => ('.', Color::Gray),
+                            crate::forge::TerrainFeature::Obstacle => ('#', Color::DarkGray),
+                            crate::forge::TerrainFeature::DifficultTerrain => ('~', Color::Yellow),
+                            crate::forge::TerrainFeature::Cover => ('=', Color::Green),
+                            crate::forge::TerrainFeature::Hazard => ('^', Color::Red),
+                            crate::forge::TerrainFeature::Elevation => ('△', Color::LightYellow),
+                            crate::forge::TerrainFeature::Water => ('≈', Color::Blue),
+                            crate::forge::TerrainFeature::Altar => ('♦', Color::Magenta),
+                            crate::forge::TerrainFeature::Pillar => ('○', Color::Gray),
+                            crate::forge::TerrainFeature::Pit => ('O', Color::Red),
+                        };
+
+                        line_spans.push(Span::styled(symbol.to_string(), Style::default().fg(color)));
+                    }
+                }
+            }
+
+            // Add right padding
+            let remaining = available_width - pad_left - battlefield_width;
+            for _ in 0..remaining {
+                line_spans.push(Span::raw(" "));
+            }
+
+            battlefield_lines.push(Line::from(line_spans));
+        }
+
+        // Add bottom padding
+        let remaining_bottom = available_height - pad_top - battlefield_height;
+        for _ in 0..remaining_bottom {
+            battlefield_lines.push(Line::from(" ".repeat(available_width as usize)));
+        }
+
+        let battlefield_widget = Paragraph::new(battlefield_lines)
+            .block(Block::default()
+                .title("Battlefield")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green)));
+
+        f.render_widget(battlefield_widget, area);
+    }
+
+    fn draw_initiative_sidebar_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_state: &TacticalCombatState) {
+        // Split sidebar into Initiative Order (top) and Quick Stats (bottom)
+        let sidebar_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(60),  // Initiative order
+                Constraint::Percentage(40),  // Quick stats
+            ])
+            .split(area);
+
+        // === INITIATIVE ORDER ===
+        let mut init_lines = vec![
+            Line::from(Span::styled(
+                format!("Round {}", tactical_state.round_number),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            )),
+            Line::from(""),
+        ];
+
+        for (idx, (participant_idx, init_roll)) in tactical_state.initiative_order.iter().enumerate() {
+            let participant = &tactical_state.participants[*participant_idx];
+            let is_current = idx == tactical_state.current_turn_index;
+
+            let symbol = if participant.base_participant.is_player {
+                let player_num = tactical_state.participants.iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.base_participant.is_player)
+                    .position(|(i, _)| i == *participant_idx)
+                    .unwrap_or(0) + 1;
+                player_num.to_string()
+            } else {
+                participant.base_participant.name.chars().next().unwrap_or('?').to_string()
+            };
+
+            let color = if participant.base_participant.is_player {
+                Color::Cyan
+            } else {
+                Color::Red
+            };
+
+            let marker = if is_current { "→ " } else { "  " };
+            let style = if is_current {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(color)
+            };
+
+            init_lines.push(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(symbol, style),
+                Span::styled(format!(" {} ({})", participant.base_participant.name, init_roll), style),
+            ]));
+        }
+
+        let initiative_widget = Paragraph::new(init_lines)
+            .block(Block::default()
+                .title("Initiative Order")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)));
+
+        f.render_widget(initiative_widget, sidebar_chunks[0]);
+
+        // === QUICK STATS ===
+        let current_participant = tactical_state.get_current_participant();
+        let stats_lines = if let Some(participant) = current_participant {
+            if participant.base_participant.is_player {
+                // Show full stats for player characters
+                vec![
+                    Line::from(Span::styled(
+                        participant.base_participant.name.clone(),
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    )),
+                    Line::from(""),
+                    Line::from(format!("HP: {}/{}",
+                        participant.base_participant.combat_stats.hit_points.current,
+                        participant.base_participant.combat_stats.hit_points.max)),
+                    Line::from(format!("AV: {}", participant.base_participant.combat_stats.attack_value)),
+                    Line::from(format!("DV: {}", participant.base_participant.combat_stats.defensive_value)),
+                ]
+            } else {
+                // Show threat level for enemies instead of exact stats
+                let (threat_level, threat_color) = {
+                    // For now, use red for all enemies (TODO: Calculate based on level comparison)
+                    ("Dangerous", Color::Red)
+                };
+
+                // Calculate health bar representation without showing exact numbers
+                let hp_current = participant.base_participant.combat_stats.hit_points.current;
+                let hp_max = participant.base_participant.combat_stats.hit_points.max;
+                let hp_percent = (hp_current as f32 / hp_max as f32 * 100.0) as u32;
+
+                let health_status = if hp_percent >= 75 {
+                    ("Healthy", Color::Green)
+                } else if hp_percent >= 50 {
+                    ("Wounded", Color::Yellow)
+                } else if hp_percent >= 25 {
+                    ("Bloodied", Color::LightRed)
+                } else {
+                    ("Near Death", Color::Red)
+                };
+
+                vec![
+                    Line::from(Span::styled(
+                        participant.base_participant.name.clone(),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                    )),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::raw("Threat: "),
+                        Span::styled(threat_level, Style::default().fg(threat_color).add_modifier(Modifier::BOLD)),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("Condition: "),
+                        Span::styled(health_status.0, Style::default().fg(health_status.1)),
+                    ]),
+                ]
+            }
+        } else {
+            vec![Line::from("No active participant")]
+        };
+
+        let stats_widget = Paragraph::new(stats_lines)
+            .block(Block::default()
+                .title("Quick Stats")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)));
+
+        f.render_widget(stats_widget, sidebar_chunks[1]);
+    }
+
+    fn draw_combat_log_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_state: &TacticalCombatState) {
+        // Show the last 8 lines of combat log (or whatever fits)
+        let visible_lines = area.height.saturating_sub(2) as usize; // Subtract borders
+        let start_idx = tactical_state.log_scroll_offset;
+        let end_idx = (start_idx + visible_lines).min(tactical_state.combat_log.len());
+
+        let log_lines: Vec<Line> = tactical_state.combat_log[start_idx..end_idx]
+            .iter()
+            .map(|msg| Line::from(msg.clone()))
+            .collect();
+
+        let log_widget = Paragraph::new(log_lines)
+            .block(Block::default()
+                .title("Combat Log")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Blue)))
+            .wrap(Wrap { trim: true });
+
+        f.render_widget(log_widget, area);
+    }
+
+    fn draw_action_hotkey_bar(f: &mut Frame, area: ratatui::layout::Rect, _tactical_state: &TacticalCombatState) {
+        let hotkey_text = vec![
+            Line::from(vec![
+                Span::styled("[A]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("ttack ", Style::default().fg(Color::White)),
+                Span::styled("[M]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("ove ", Style::default().fg(Color::White)),
+                Span::styled("[C]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("ast ", Style::default().fg(Color::White)),
+                Span::styled("[U]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("se ", Style::default().fg(Color::White)),
+                Span::styled("[D]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("efend ", Style::default().fg(Color::White)),
+                Span::styled("[S]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("kills ", Style::default().fg(Color::White)),
+                Span::styled("[E]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("nd Turn", Style::default().fg(Color::White)),
+            ]),
+        ];
+
+        let hotkeys_widget = Paragraph::new(hotkey_text)
+            .block(Block::default()
+                .title("Actions")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green)))
+            .alignment(Alignment::Center);
+
+        f.render_widget(hotkeys_widget, area);
+    }
+
+    fn draw_command_input_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_state: &TacticalCombatState) {
+        let input_text = if tactical_state.command_buffer.is_empty() {
+            Line::from(vec![
+                Span::styled("> ", Style::default().fg(Color::Green)),
+                Span::styled("Enter command...", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("> ", Style::default().fg(Color::Green)),
+                Span::styled(&tactical_state.command_buffer, Style::default().fg(Color::White)),
+            ])
+        };
+
+        let input_widget = Paragraph::new(input_text)
+            .block(Block::default()
+                .title("Command Input")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green)));
+
+        f.render_widget(input_widget, area);
     }
 
     #[allow(dead_code)]
@@ -3976,2455 +3970,6 @@ impl GameUI {
         }
     }
 
-    fn draw_tactical_combat_static(f: &mut Frame, tactical_combat_state: &TacticalCombatState) {
-        let area = f.size();
-        
-        // Create a centered layout with battlefield in the middle surrounded by panels
-        let main_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(12), // Top panels row
-                Constraint::Min(20),    // Middle row (contains battlefield)
-                Constraint::Length(6),  // Bottom panels row (shorter for just commands)
-            ])
-            .split(area);
-        
-        // Top row: Character Info, Skills Available, Target Info
-        let top_panels = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(33), // Character Info
-                Constraint::Percentage(34), // Skills Available
-                Constraint::Percentage(33), // Target Info
-            ])
-            .split(main_layout[0]);
-        
-        // Middle row: Actions, Battlefield, Info - all equal thirds
-        let middle_row = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(33), // Left actions column
-                Constraint::Percentage(34), // Centered battlefield (1/3)
-                Constraint::Percentage(33), // Right info column
-            ])
-            .split(main_layout[1]);
-        
-        // Left column: Movement, Combat, Skills
-        let left_panels = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(8),  // Movement
-                Constraint::Length(8),  // Combat
-                Constraint::Min(6),     // Skills
-            ])
-            .split(middle_row[0]);
-        
-        // Right column: Spell Details, Inventory, Combat Log
-        let right_panels = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(10), // Spell Details
-                Constraint::Length(8),  // Inventory
-                Constraint::Min(6),     // Combat Log
-            ])
-            .split(middle_row[2]);
-        
-        // Bottom row: Controls and status
-        let bottom_panels = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(100), // Controls and navigation help
-            ])
-            .split(main_layout[2]);
-        
-        // Draw centered battlefield
-        Self::draw_centered_battlefield(f, middle_row[1], tactical_combat_state);
-        
-        // Draw top panels
-        Self::draw_character_info_panel(f, top_panels[0], tactical_combat_state);
-        Self::draw_skills_available_panel(f, top_panels[1], tactical_combat_state);
-        Self::draw_target_info_panel(f, top_panels[2], tactical_combat_state);
-        
-        // Draw left action panels
-        Self::draw_movement_panel(f, left_panels[0], tactical_combat_state);
-        Self::draw_combat_panel(f, left_panels[1], tactical_combat_state);
-        Self::draw_skills_panel(f, left_panels[2], tactical_combat_state);
-        
-        // Draw right info panels
-        Self::draw_spell_details_panel(f, right_panels[0], tactical_combat_state);
-        Self::draw_inventory_panel(f, right_panels[1], tactical_combat_state);
-        Self::draw_combat_log(f, right_panels[2], tactical_combat_state);
-        
-        // Draw bottom controls
-        Self::draw_tactical_navigation_controls(f, bottom_panels[0], tactical_combat_state);
-    }
-    
-    fn draw_tactical_battlefield(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let battlefield = &tactical_combat_state.battlefield;
-        let cursor_pos = &tactical_combat_state.cursor_position;
-        
-        // Calculate optimal tactical view size (not entire terminal)
-        let optimal_view_width = (area.width.saturating_sub(2)).min(60) as i32; // Max 60 chars wide
-        let optimal_view_height = (area.height.saturating_sub(2)).min(30) as i32; // Max 30 lines tall
-        
-        // Get current participant position to center view on
-        let center_pos = if let Some(current_participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
-            current_participant.position
-        } else {
-            // Fallback to battlefield center if no participant
-            crate::forge::BattlefieldPosition::new(battlefield.width as i32 / 2, battlefield.height as i32 / 2)
-        };
-        
-        // Calculate viewport bounds centered on current participant with optimal size
-        let half_width = optimal_view_width / 2;
-        let half_height = optimal_view_height / 2;
-        let start_x = (center_pos.x - half_width).max(0);
-        let end_x = (center_pos.x + half_width).min(battlefield.width as i32 - 1);
-        let start_y = (center_pos.y - half_height).max(0);
-        let end_y = (center_pos.y + half_height).min(battlefield.height as i32 - 1);
-        
-        let mut battlefield_lines = Vec::new();
-        
-        for y in start_y..=end_y {
-            let mut line_spans = Vec::new();
-            
-            for x in start_x..=end_x {
-                let pos = crate::forge::BattlefieldPosition::new(x, y);
-                let mut tile_char = '.'; // Default open terrain
-                let mut tile_color = Color::DarkGray;
-                
-                // Get terrain character and color
-                if let Some(tile) = battlefield.tiles.get(&pos) {
-                    match tile.terrain {
-                        crate::forge::TerrainFeature::Open => {
-                            tile_char = '.';
-                            tile_color = Color::DarkGray;
-                        }
-                        crate::forge::TerrainFeature::Obstacle => {
-                            tile_char = '#';
-                            tile_color = Color::Gray;
-                        }
-                        crate::forge::TerrainFeature::DifficultTerrain => {
-                            tile_char = '~';
-                            tile_color = Color::Yellow;
-                        }
-                        crate::forge::TerrainFeature::Cover => {
-                            tile_char = '▣';
-                            tile_color = Color::Green;
-                        }
-                        crate::forge::TerrainFeature::Hazard => {
-                            tile_char = '^';
-                            tile_color = Color::Red;
-                        }
-                        crate::forge::TerrainFeature::Elevation => {
-                            tile_char = '▲';
-                            tile_color = Color::LightBlue;
-                        }
-                        crate::forge::TerrainFeature::Water => {
-                            tile_char = '≈';
-                            tile_color = Color::Blue;
-                        }
-                        crate::forge::TerrainFeature::Altar => {
-                            tile_char = '†';
-                            tile_color = Color::Magenta;
-                        }
-                        crate::forge::TerrainFeature::Pillar => {
-                            tile_char = '◊';
-                            tile_color = Color::Gray;
-                        }
-                        crate::forge::TerrainFeature::Pit => {
-                            tile_char = 'O';
-                            tile_color = Color::Red;
-                        }
-                    }
-                }
-
-                // Check for participants at this position with enhanced visuals
-                for (participant_id, participant_pos) in battlefield.participant_positions.iter() {
-                    if participant_pos == &pos {
-                        if let Some(participant) = tactical_combat_state.participants.get(*participant_id) {
-                            let hp_current = participant.base_participant.combat_stats.hit_points.current;
-                            let hp_max = participant.base_participant.combat_stats.hit_points.max;
-                            let hp_percentage = (hp_current as f32 / hp_max as f32) * 100.0;
-
-                            if participant.base_participant.is_player {
-                                tile_char = '@';
-                                // Color based on HP status
-                                tile_color = if hp_percentage >= 66.0 {
-                                    Color::LightGreen
-                                } else if hp_percentage >= 33.0 {
-                                    Color::Yellow
-                                } else {
-                                    Color::LightRed
-                                };
-                            } else {
-                                // Different icons for different enemy types based on name/type
-                                let name_lower = participant.base_participant.name.to_lowercase();
-                                if name_lower.contains("goblin") || name_lower.contains("kobold") {
-                                    tile_char = 'g';
-                                } else if name_lower.contains("orc") {
-                                    tile_char = 'o';
-                                } else if name_lower.contains("troll") {
-                                    tile_char = 'T';
-                                } else if name_lower.contains("dragon") {
-                                    tile_char = 'D';
-                                } else if name_lower.contains("undead") || name_lower.contains("skeleton") || name_lower.contains("zombie") {
-                                    tile_char = 'z';
-                                } else if name_lower.contains("demon") || name_lower.contains("devil") {
-                                    tile_char = '&';
-                                } else {
-                                    tile_char = 'E'; // Generic enemy
-                                }
-
-                                // Color based on HP status for enemies too
-                                tile_color = if hp_percentage >= 66.0 {
-                                    Color::Red
-                                } else if hp_percentage >= 33.0 {
-                                    Color::LightYellow
-                                } else {
-                                    Color::DarkGray // Heavily wounded
-                                };
-                            }
-                        }
-                    }
-                }
-
-                // Check for environmental features
-                for feature in &battlefield.environmental_features {
-                    if feature.position == pos {
-                        match feature.feature_type {
-                            crate::forge::EnvironmentalFeatureType::Lever => {
-                                tile_char = '|';
-                                tile_color = Color::Cyan;
-                            }
-                            crate::forge::EnvironmentalFeatureType::Trap => {
-                                tile_char = '*';
-                                tile_color = Color::Red;
-                            }
-                            crate::forge::EnvironmentalFeatureType::MagicCircle => {
-                                tile_char = '○';
-                                tile_color = Color::Magenta;
-                            }
-                            crate::forge::EnvironmentalFeatureType::Brazier => {
-                                tile_char = '⋄';
-                                tile_color = Color::LightYellow;
-                            }
-                            crate::forge::EnvironmentalFeatureType::Statue => {
-                                tile_char = '♦';
-                                tile_color = Color::Gray;
-                            }
-                            crate::forge::EnvironmentalFeatureType::Well => {
-                                tile_char = '◉';
-                                tile_color = Color::Blue;
-                            }
-                            crate::forge::EnvironmentalFeatureType::Portal => {
-                                tile_char = '◯';
-                                tile_color = Color::Magenta;
-                            }
-                        }
-                    }
-                }
-                
-                // Highlight cursor position
-                if cursor_pos == &pos {
-                    tile_color = Color::White;
-                    // Use different styles for cursor
-                    let style = Style::default().fg(tile_color).add_modifier(Modifier::BOLD | Modifier::REVERSED);
-                    line_spans.push(Span::styled(tile_char.to_string(), style));
-                } else {
-                    // Check if position is highlighted (movement range, targets, etc.)
-                    let is_highlighted = tactical_combat_state.highlighted_positions.contains(&pos);
-                    let is_valid_spell_target = tactical_combat_state.valid_spell_targets.contains(&pos);
-                    let is_spell_effect_preview = tactical_combat_state.spell_effect_preview.contains(&pos);
-                    
-                    let style = if is_spell_effect_preview {
-                        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
-                    } else if is_valid_spell_target {
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else if is_highlighted {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(tile_color)
-                    };
-                    line_spans.push(Span::styled(tile_char.to_string(), style));
-                }
-            }
-            
-            battlefield_lines.push(Line::from(line_spans));
-        }
-        
-        let theme = framework::UITheme::forge_theme();
-        let battlefield_widget = Paragraph::new(battlefield_lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title(format!("⚔ Tactical Battlefield - Minute {} ⚔",
-                    tactical_combat_state.round))
-                .border_style(Style::default().fg(theme.primary)));
-
-        f.render_widget(battlefield_widget, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_current_participant_info(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let info_text = if let Some(participant) = tactical_combat_state.get_current_participant() {
-            let (phase_text, phase_color, instructions) = match tactical_combat_state.combat_phase {
-                CombatPhase::TacticalMovement => {
-                    if participant.base_participant.is_player {
-                        if participant.movement_remaining > 0 {
-                            ("🚶 YOUR TURN - MOVEMENT PHASE", Color::LightGreen, "🔸 WASD/Arrow Keys: Move cursor\n🔸 ENTER: Move to highlighted position\n🔸 TAB: Open action menu\n🔸 E: End turn without moving")
-                        } else {
-                            ("⏸️ YOUR TURN - NO MOVEMENT LEFT", Color::Yellow, "🔸 TAB: Open action menu\n🔸 E: End turn")
-                        }
-                    } else {
-                        ("🤖 AI TURN - PLEASE WAIT", Color::Red, "🔸 AI is thinking and moving...\n🔸 No player input required")
-                    }
-                },
-                CombatPhase::TacticalActionSelection => {
-                    if participant.base_participant.is_player {
-                        if tactical_combat_state.action_menu_open {
-                            ("⚡ YOUR TURN - ACTION SELECTION", Color::LightCyan, "🔸 ↑↓: Select action\n🔸 ENTER: Confirm action\n🔸 ESC: Back to movement")
-                        } else {
-                            ("📋 YOUR TURN - ACTION READY", Color::LightBlue, "🔸 TAB: Open action menu\n🔸 ESC: Back to movement")
-                        }
-                    } else {
-                        ("🤖 AI TURN - CHOOSING ACTION", Color::Red, "🔸 AI is selecting their action...\n🔸 No player input required")
-                    }
-                },
-                CombatPhase::TacticalTargeting => {
-                    if participant.base_participant.is_player {
-                        ("🎯 YOUR TURN - TARGETING", Color::LightMagenta, "🔸 Move cursor to target\n🔸 ENTER: Confirm target\n🔸 ESC: Cancel")
-                    } else {
-                        ("🤖 AI TURN - TARGETING", Color::Red, "🔸 AI is selecting target...\n🔸 No player input required")
-                    }
-                },
-                CombatPhase::TacticalEnvironmentalInteraction => {
-                    if participant.base_participant.is_player {
-                        ("🏛️ YOUR TURN - ENVIRONMENT", Color::LightGreen, "🔸 Select feature\n🔸 ENTER: Interact")
-                    } else {
-                        ("🤖 AI TURN - ENVIRONMENT", Color::Red, "🔸 AI is interacting...\n🔸 No player input required")
-                    }
-                },
-                CombatPhase::ForgeActionDeclaration => {
-                    if participant.base_participant.is_player {
-                        ("🎲 YOUR TURN - FORGE MODE", Color::LightYellow, "🔸 Select Forge action")
-                    } else {
-                        ("🤖 AI TURN - FORGE MODE", Color::Red, "🔸 AI is declaring action...\n🔸 No player input required")
-                    }
-                },
-                CombatPhase::ForgeActionResolution => ("⚔️ RESOLVING ACTIONS", Color::Red, "🔸 Actions executing..."),
-                CombatPhase::CombatComplete(_) => ("🏁 COMBAT COMPLETE", Color::White, "🔸 ENTER: Continue"),
-                _ => ("❓ UNKNOWN PHASE", Color::Gray, "🔸 Unknown state"),
-            };
-            
-            let round_info = if tactical_combat_state.combat_minute > 0 {
-                format!("Combat Minute: {} | Round: {}", tactical_combat_state.combat_minute, tactical_combat_state.round)
-            } else {
-                format!("Round: {}", tactical_combat_state.round)
-            };
-            
-            // Enhanced highlighting for current participant
-            let name_style = if participant.base_participant.is_player {
-                Style::default().fg(Color::Black).bg(Color::LightGreen).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Black).bg(Color::LightRed).add_modifier(Modifier::BOLD)
-            };
-            
-            vec![
-                Line::from(vec![Span::styled(
-                    format!(" {} ", participant.base_participant.name),
-                    name_style
-                )]),
-                Line::from(vec![Span::styled(
-                    phase_text,
-                    Style::default().fg(phase_color).add_modifier(Modifier::BOLD)
-                )]),
-                Line::from(format!("HP:{}/{}  Mv:{}/{}  Pos:({},{})", 
-                    participant.base_participant.combat_stats.hit_points.current,
-                    participant.base_participant.combat_stats.hit_points.max,
-                    participant.movement_remaining, 
-                    participant.movement_capabilities.movement_speed,
-                    participant.position.x, 
-                    participant.position.y)),
-                Line::from(format!("AV:{}  DV:{}", 
-                    participant.base_participant.combat_stats.attack_value,
-                    participant.base_participant.combat_stats.defensive_value)),
-                Line::from(vec![Span::styled(
-                    instructions,
-                    Style::default().fg(Color::LightBlue).add_modifier(Modifier::ITALIC)
-                )]),
-                Line::from(round_info),
-            ]
-        } else {
-            vec![Line::from("No participant")]
-        };
-        
-        let title = if let Some(participant) = tactical_combat_state.get_current_participant() {
-            if participant.base_participant.is_player {
-                "🎮 Your Turn"
-            } else {
-                "🤖 AI Turn"
-            }
-        } else {
-            "Turn Info"
-        };
-        
-        let info_widget = Paragraph::new(info_text)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(Style::default().fg(Color::Green)));
-        
-        f.render_widget(info_widget, area);
-    }
-    
-    fn draw_combat_log(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let theme = framework::UITheme::forge_theme();
-
-        // Adjust for horizontal layout - fit more lines in limited height
-        let available_lines = (area.height.saturating_sub(2)).max(1) as usize; // Account for borders
-        let available_width = area.width.saturating_sub(2) as usize; // Account for borders
-
-        // Helper to determine message color based on content
-        let get_message_style = |msg: &str| -> Style {
-            let msg_lower = msg.to_lowercase();
-            if msg_lower.contains("===") || msg_lower.contains("combat minute") {
-                // Round/minute headers
-                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
-            } else if msg_lower.contains("hits") || msg_lower.contains("strikes") || msg_lower.contains("attack") {
-                // Attack messages
-                Style::default().fg(theme.primary)
-            } else if msg_lower.contains("damage") || msg_lower.contains("hp") && msg_lower.contains("-") {
-                // Damage messages
-                Style::default().fg(theme.error)
-            } else if msg_lower.contains("heals") || msg_lower.contains("restores") || msg_lower.contains("+") {
-                // Healing messages
-                Style::default().fg(theme.success)
-            } else if msg_lower.contains("casts") || msg_lower.contains("spell") || msg_lower.contains("magic") {
-                // Magic messages
-                Style::default().fg(theme.sp_color)
-            } else if msg_lower.contains("misses") || msg_lower.contains("fails") || msg_lower.contains("dodges") {
-                // Miss/fail messages
-                Style::default().fg(theme.text_muted)
-            } else if msg_lower.contains("dies") || msg_lower.contains("defeated") || msg_lower.contains("victory") {
-                // Death/victory messages
-                Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)
-            } else {
-                // Default messages
-                Style::default().fg(theme.text_primary)
-            }
-        };
-
-        let log_lines: Vec<Line> = tactical_combat_state.combat_log
-            .iter()
-            .skip(tactical_combat_state.combat_log.len().saturating_sub(available_lines)) // Show oldest first, newest at bottom
-            .map(|msg| {
-                let display_msg = if msg.len() > available_width {
-                    let truncate_at = available_width.saturating_sub(3); // Leave space for "..."
-                    format!("{}...", &msg[..truncate_at])
-                } else {
-                    msg.clone()
-                };
-
-                let style = get_message_style(msg);
-
-                // Add icons for certain message types
-                let icon = if msg.contains("===") {
-                    "⚡ "
-                } else if msg.to_lowercase().contains("hits") {
-                    "⚔ "
-                } else if msg.to_lowercase().contains("damage") {
-                    "💥 "
-                } else if msg.to_lowercase().contains("casts") {
-                    "✨ "
-                } else if msg.to_lowercase().contains("dies") {
-                    "💀 "
-                } else {
-                    ""
-                };
-
-                Line::from(vec![
-                    Span::styled(icon, style),
-                    Span::styled(display_msg, style),
-                ])
-            })
-            .collect();
-
-        let log_widget = Paragraph::new(log_lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("📜 Combat Log")
-                .border_style(Style::default().fg(theme.border_primary)))
-            .style(Style::default().bg(theme.background))
-            .wrap(ratatui::widgets::Wrap { trim: true });
-
-        f.render_widget(log_widget, area);
-    }
-    
-    fn draw_movement_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let is_active = tactical_combat_state.active_panel == CombatPanel::Movement;
-        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
-        
-        let movement_options = vec![
-            "[1] Move Only",
-            "[2] Move + Attack",
-            "[3] Charge",
-            "[4] Sprint",
-            "[5] Tactical Retreat",
-        ];
-        
-        let lines: Vec<Line> = movement_options
-            .iter()
-            .enumerate()
-            .map(|(i, option)| {
-                let style = if is_active && i == tactical_combat_state.panel_selections.movement_index {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                Line::from(Span::styled(*option, style))
-            })
-            .collect();
-        
-        let movement_panel = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Movement")
-                .border_style(Style::default().fg(border_color)));
-        
-        f.render_widget(movement_panel, area);
-    }
-    
-    fn draw_combat_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let is_active = tactical_combat_state.active_panel == CombatPanel::Combat;
-        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
-        
-        let combat_options = vec![
-            "[A] Attack",
-            "[D] Defend",
-            "[G] Grapple",
-            "[R] Ready Item",
-            "[W] Switch Weapon",
-        ];
-        
-        let lines: Vec<Line> = combat_options
-            .iter()
-            .enumerate()
-            .map(|(i, option)| {
-                let style = if is_active && i == tactical_combat_state.panel_selections.combat_index {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                Line::from(Span::styled(*option, style))
-            })
-            .collect();
-        
-        let combat_panel = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Combat")
-                .border_style(Style::default().fg(border_color)));
-        
-        f.render_widget(combat_panel, area);
-    }
-    
-    fn draw_skills_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let is_active = tactical_combat_state.active_panel == CombatPanel::Skills;
-        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
-        
-        let skills_options = vec![
-            "[S] Cast Spell",
-            "[P] Perception Check",
-            "[T] Tactical Analysis",
-            "[I] Use Item",
-            "[E] End Turn",
-        ];
-        
-        let lines: Vec<Line> = skills_options
-            .iter()
-            .enumerate()
-            .map(|(i, option)| {
-                let style = if is_active && i == tactical_combat_state.panel_selections.skills_index {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                Line::from(Span::styled(*option, style))
-            })
-            .collect();
-        
-        let skills_panel = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Skills")
-                .border_style(Style::default().fg(border_color)));
-        
-        f.render_widget(skills_panel, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_target_info(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let mut lines = vec![];
-        
-        // Find target at cursor position
-        let cursor_pos = &tactical_combat_state.cursor_position;
-        let mut found_target = false;
-        
-        for (participant_id, pos) in &tactical_combat_state.battlefield.participant_positions {
-            if pos == cursor_pos {
-                if let Some(participant) = tactical_combat_state.participants.get(*participant_id) {
-                    found_target = true;
-                    lines.push(Line::from(Span::styled(&participant.base_participant.name, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
-                    lines.push(Line::from(format!("HP: {}/{}", 
-                        participant.base_participant.combat_stats.hit_points.current,
-                        participant.base_participant.combat_stats.hit_points.max
-                    )));
-                    
-                    // Calculate distance from current participant
-                    if let Some(current) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
-                        let distance = current.position.manhattan_distance_to(cursor_pos);
-                        lines.push(Line::from(format!("Distance: {}m", distance)));
-                    }
-                    
-                    lines.push(Line::from(format!("Movement: {}/{}", 
-                        participant.movement_remaining,
-                        participant.movement_capabilities.movement_speed
-                    )));
-                }
-            }
-        }
-        
-        if !found_target {
-            lines.push(Line::from(Span::styled("No Target", Style::default().fg(Color::DarkGray))));
-            lines.push(Line::from(""));
-            lines.push(Line::from("Move cursor over"));
-            lines.push(Line::from("an enemy to see"));
-            lines.push(Line::from("their information"));
-        }
-        
-        let target_panel = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Target")
-                .border_style(Style::default().fg(Color::Cyan)));
-        
-        f.render_widget(target_panel, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_navigation_hints(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let active_panel_name = match tactical_combat_state.active_panel {
-            CombatPanel::Battlefield => "Battlefield",
-            CombatPanel::Movement => "Movement",
-            CombatPanel::Combat => "Combat",
-            CombatPanel::Skills => "Skills",
-            CombatPanel::CharacterInfo => "Character Info",
-            CombatPanel::TargetInfo => "Target Info",
-            CombatPanel::SkillsAvailable => "Skills Available",
-            CombatPanel::Inventory => "Inventory",
-            CombatPanel::SpellDetails => "Spell Details",
-        };
-        
-        let hint_text = format!("[TAB] Switch Panel | [hjkl] Navigate | [HJKL] Change Panel | Active: {}", active_panel_name);
-        
-        let hints = Paragraph::new(hint_text)
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)));
-        
-        f.render_widget(hints, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_quick_battlefield_status(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let current_participant = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index);
-        let status_text = if let Some(participant) = current_participant {
-            format!("Turn: {} | Pos: ({}, {})", 
-                participant.base_participant.name,
-                participant.position.x,
-                participant.position.y
-            )
-        } else {
-            "No active participant".to_string()
-        };
-        
-        let status = Paragraph::new(status_text)
-            .style(Style::default().fg(Color::Gray))
-            .alignment(Alignment::Center)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)));
-        
-        f.render_widget(status, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_equipment_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let mut lines = vec![
-            Line::from(Span::styled("Equipment", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-            Line::from(""),
-        ];
-        
-        if let Some(participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
-            if let Some(weapon) = &participant.base_participant.weapon {
-                lines.push(Line::from(format!("⚔️ {}", weapon.name)));
-                lines.push(Line::from(format!("   Dmg: {} (+{})", weapon.damage_dice, weapon.damage_bonus)));
-            } else {
-                lines.push(Line::from("⚔️ No weapon"));
-            }
-            
-            if let Some(armor) = &participant.base_participant.armor {
-                lines.push(Line::from(format!("🛡️ {}", armor.name)));
-                lines.push(Line::from(format!("   AR: {}", armor.armor_rating)));
-            } else {
-                lines.push(Line::from("🛡️ No armor"));
-            }
-            
-            if let Some(shield) = &participant.base_participant.shield {
-                lines.push(Line::from(format!("🔰 {}", shield.name)));
-            } else {
-                lines.push(Line::from("🔰 No shield"));
-            }
-        } else {
-            lines.push(Line::from("No participant selected"));
-        }
-        
-        let equipment = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Equipment")
-                .border_style(Style::default().fg(Color::Blue)));
-        
-        f.render_widget(equipment, area);
-    }
-    
-    fn draw_inventory_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let is_active = tactical_combat_state.active_panel == CombatPanel::Inventory;
-        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
-        
-        let mut lines = vec![
-            Line::from(Span::styled("QUICK ITEMS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-            Line::from(""),
-        ];
-        
-        if let Some(_participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
-            let selected_index = tactical_combat_state.panel_selections.inventory_index;
-            let items = vec![
-                "🧪 Health Potion",
-                "⚡ Mana Potion", 
-                "🗡️ Throwing Knife",
-                "💣 Bomb"
-            ];
-            
-            for (i, item) in items.iter().enumerate() {
-                let style = if is_active && i == selected_index {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                lines.push(Line::from(Span::styled(*item, style)));
-            }
-        } else {
-            lines.push(Line::from("No items available"));
-        }
-        
-        let inventory = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Combat Items")
-                .border_style(Style::default().fg(border_color)));
-        
-        f.render_widget(inventory, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_effects_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let mut lines = vec![
-            Line::from(Span::styled("Active Effects", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-            Line::from(""),
-        ];
-        
-        if let Some(participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
-            // Show active status effects
-            if participant.base_participant.is_alive() {
-                lines.push(Line::from("✅ Healthy"));
-            }
-            
-            // Add more effects here based on game state
-            lines.push(Line::from("🔥 No effects"));
-        } else {
-            lines.push(Line::from("No participant"));
-        }
-        
-        let effects = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Status Effects")
-                .border_style(Style::default().fg(Color::Magenta)));
-        
-        f.render_widget(effects, area);
-    }
-    
-    fn draw_tactical_navigation_controls(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let controls = match tactical_combat_state.combat_phase {
-            crate::ui::CombatPhase::TacticalMovement => {
-                vec![
-                    Line::from(vec![
-                        Span::styled("MOVEMENT: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                        Span::raw("WASD = Move Cursor | ENTER = Move Player | E = End Turn")
-                    ]),
-                    Line::from(vec![
-                        Span::styled("ACTIONS: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                        Span::raw("1 = Attack | 2 = Cast Spell | 3 = Defend | 4 = Use Item")
-                    ]),
-                    Line::from(vec![
-                        Span::styled("PANELS: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::raw("HJKL = Navigate Panels | TAB = Action Menu | F = Forge Combat")
-                    ]),
-                ]
-            },
-            crate::ui::CombatPhase::TacticalActionSelection => {
-                vec![
-                    Line::from(vec![
-                        Span::styled("SPELL MENU: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-                        Span::raw("J/K = Navigate Spells | ENTER = Select | ESC = Cancel")
-                    ]),
-                ]
-            },
-            crate::ui::CombatPhase::TacticalTargeting => {
-                vec![
-                    Line::from(vec![
-                        Span::styled("TARGETING: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                        Span::raw("WASD = Move Target | ENTER = Confirm | ESC = Cancel")
-                    ]),
-                ]
-            },
-            crate::ui::CombatPhase::ForgeActionDeclaration => {
-                vec![
-                    Line::from(vec![
-                        Span::styled("FORGE ACTIONS: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                        Span::raw("1 = Melee | 2 = Missile | 3 = Spell | 4 = Defend | 5 = Item | 6 = Wait")
-                    ]),
-                    Line::from(vec![
-                        Span::styled("CONTROLS: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                        Span::raw("TAB = Skip Turn | ESC = Exit Forge Mode")
-                    ]),
-                ]
-            },
-            _ => {
-                vec![
-                    Line::from(vec![
-                        Span::styled("COMBAT: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::raw("Use number keys for quick actions or TAB for menu")
-                    ]),
-                ]
-            }
-        };
-        
-        let controls_panel = Paragraph::new(controls)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Controls")
-                .border_style(Style::default().fg(Color::DarkGray)))
-            .alignment(Alignment::Center);
-        
-        f.render_widget(controls_panel, area);
-    }
-    
-    // New comprehensive panel functions for the redesigned layout
-    
-    fn draw_centered_battlefield(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        // Calculate the actual battlefield dimensions
-        let battlefield_width = 60.min(area.width.saturating_sub(4) as usize);
-        let battlefield_height = 30.min(area.height.saturating_sub(4) as usize);
-        
-        // Create a centered area for the actual battlefield
-        let battlefield_area = Self::centered_rect(
-            ((battlefield_width as f32 / area.width as f32) * 100.0) as u16,
-            ((battlefield_height as f32 / area.height as f32) * 100.0) as u16,
-            area
-        );
-        
-        // Fill the entire area with decorative pattern first
-        let mut pattern_lines = Vec::new();
-        let pattern_chars = ['·', '⋅', '∘', '◦', '○', '●'];
-        let mut char_idx = 0;
-        
-        for y in 0..area.height {
-            let mut line_spans = Vec::new();
-            for x in 0..area.width {
-                // Check if this position is within the battlefield area
-                let is_battlefield = x >= battlefield_area.x && 
-                                   x < battlefield_area.x + battlefield_area.width &&
-                                   y >= battlefield_area.y && 
-                                   y < battlefield_area.y + battlefield_area.height;
-                
-                if !is_battlefield {
-                    // Use decorative pattern outside battlefield
-                    let pattern_char = pattern_chars[char_idx % pattern_chars.len()];
-                    char_idx = (char_idx + 1) % (pattern_chars.len() * 3); // Slower cycling
-                    line_spans.push(Span::styled(
-                        pattern_char.to_string(),
-                        Style::default().fg(Color::DarkGray)
-                    ));
-                } else {
-                    // Leave space for battlefield
-                    line_spans.push(Span::raw(" "));
-                }
-            }
-            pattern_lines.push(Line::from(line_spans));
-        }
-        
-        // Render the background pattern
-        let theme = framework::UITheme::forge_theme();
-        let background = Paragraph::new(pattern_lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("⚔ Tactical View ⚔")
-                .border_style(Style::default().fg(theme.accent)));
-        f.render_widget(background, area);
-        
-        // Now render the actual battlefield in the centered area
-        Self::draw_tactical_battlefield(f, battlefield_area, tactical_combat_state);
-    }
-    
-    fn draw_character_info_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let theme = framework::UITheme::forge_theme();
-        let is_active = tactical_combat_state.active_panel == CombatPanel::CharacterInfo;
-        let border_color = if is_active { theme.accent } else { theme.border_secondary };
-
-        let mut lines = vec![];
-
-        if let Some(participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
-            let hp_current = participant.base_participant.combat_stats.hit_points.current;
-            let hp_max = participant.base_participant.combat_stats.hit_points.max;
-            let sp_current = participant.base_participant.magic.spell_points.current;
-            let sp_max = participant.base_participant.magic.spell_points.max;
-
-            // Character name
-            lines.push(Line::from(vec![
-                Span::styled("@ ", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
-                Span::styled(&participant.base_participant.name, Style::default()
-                    .fg(theme.text_highlight)
-                    .add_modifier(Modifier::BOLD)),
-            ]));
-            lines.push(Line::from(""));
-
-            // HP with bar
-            lines.push(Line::from(vec![
-                Span::styled("❤ ", Style::default().fg(theme.error)),
-                Span::styled(format!("{}/{}", hp_current, hp_max),
-                    Style::default().fg(theme.text_primary)),
-            ]));
-            let hp_bar_width = area.width.saturating_sub(6).min(15) as usize;
-            lines.push(Line::from(
-                framework::art::hp_bar_colored(hp_current, hp_max, hp_bar_width, &theme)
-            ));
-
-            // SP with bar
-            lines.push(Line::from(vec![
-                Span::styled("✨ ", Style::default().fg(theme.sp_color)),
-                Span::styled(format!("{}/{}", sp_current, sp_max),
-                    Style::default().fg(theme.text_primary)),
-            ]));
-            let sp_bar = framework::art::progress_bar(sp_current, sp_max, hp_bar_width, '█', '░');
-            lines.push(Line::from(Span::styled(sp_bar, Style::default().fg(theme.sp_color))));
-
-            lines.push(Line::from(""));
-
-            // Combat stats
-            lines.push(Line::from(vec![
-                Span::styled("⚔ ", Style::default().fg(theme.primary)),
-                Span::styled(format!("{}", participant.base_participant.combat_stats.attack_value),
-                    Style::default().fg(theme.accent)),
-                Span::styled("  🛡 ", Style::default().fg(theme.info)),
-                Span::styled(format!("{}", participant.base_participant.combat_stats.defensive_value),
-                    Style::default().fg(theme.info)),
-            ]));
-
-            // Movement
-            let move_color = if participant.movement_remaining > 0 { theme.success } else { theme.text_muted };
-            lines.push(Line::from(vec![
-                Span::styled("🏃 ", Style::default().fg(move_color)),
-                Span::styled(format!("{}/{}",
-                    participant.movement_remaining,
-                    participant.movement_capabilities.movement_speed),
-                    Style::default().fg(move_color)),
-            ]));
-        } else {
-            lines.push(Line::from(Span::styled("No character", Style::default().fg(theme.text_muted))));
-        }
-
-        let panel = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("👤 Character")
-                .border_style(Style::default().fg(border_color)))
-            .style(Style::default().bg(theme.background));
-
-        f.render_widget(panel, area);
-    }
-    
-    fn draw_skills_available_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let is_active = tactical_combat_state.active_panel == CombatPanel::SkillsAvailable;
-        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
-        
-        let mut lines = vec![
-            Line::from(Span::styled("SKILLS AVAILABLE", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-            Line::from(""),
-        ];
-        
-        if let Some(participant) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
-            // Show relevant skills for combat
-            lines.push(Line::from(Span::styled("Combat Skills:", Style::default().fg(Color::Red))));
-            lines.push(Line::from("○ Sword: 15% (WSL 0)"));
-            lines.push(Line::from("○ Bow: 12% (WSL 0)"));
-            lines.push(Line::from(""));
-            
-            lines.push(Line::from(Span::styled("Basic Skills:", Style::default().fg(Color::Cyan))));
-            lines.push(Line::from("✓ Perception: 22%"));
-            lines.push(Line::from("○ Tactics: 17%"));
-            
-            // Show spells if available
-            if !participant.base_participant.magic.known_spells.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled("Spells:", Style::default().fg(Color::Blue))));
-                for (_school, spells) in &participant.base_participant.magic.known_spells {
-                    for spell in spells {
-                        lines.push(Line::from(format!("✓ {}", spell)));
-                    }
-                }
-            }
-        }
-        
-        let panel = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Available Skills")
-                .border_style(Style::default().fg(border_color)));
-        
-        f.render_widget(panel, area);
-    }
-    
-    fn draw_target_info_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let theme = framework::UITheme::forge_theme();
-        let is_active = tactical_combat_state.active_panel == CombatPanel::TargetInfo;
-        let border_color = if is_active { theme.accent } else { theme.border_secondary };
-
-        let mut lines = vec![];
-        let cursor_pos = &tactical_combat_state.cursor_position;
-        let mut found_target = false;
-
-        for (participant_id, pos) in &tactical_combat_state.battlefield.participant_positions {
-            if pos == cursor_pos {
-                if let Some(participant) = tactical_combat_state.participants.get(*participant_id) {
-                    found_target = true;
-
-                    let hp_current = participant.base_participant.combat_stats.hit_points.current;
-                    let hp_max = participant.base_participant.combat_stats.hit_points.max;
-
-                    // Target name with icon
-                    let name_icon = if participant.base_participant.is_player { "@ " } else { "E " };
-                    let name_color = if participant.base_participant.is_player { theme.success } else { theme.error };
-                    lines.push(Line::from(vec![
-                        Span::styled(name_icon, Style::default().fg(name_color).add_modifier(Modifier::BOLD)),
-                        Span::styled(&participant.base_participant.name, Style::default()
-                            .fg(theme.text_highlight)
-                            .add_modifier(Modifier::BOLD)),
-                    ]));
-                    lines.push(Line::from(""));
-
-                    // HP with bar
-                    lines.push(Line::from(vec![
-                        Span::styled("❤ ", Style::default().fg(theme.error)),
-                        Span::styled(format!("{}/{}", hp_current, hp_max),
-                            Style::default().fg(theme.text_primary)),
-                    ]));
-                    let hp_bar_width = area.width.saturating_sub(6).min(15) as usize;
-                    lines.push(Line::from(
-                        framework::art::hp_bar_colored(hp_current, hp_max, hp_bar_width, &theme)
-                    ));
-
-                    lines.push(Line::from(""));
-
-                    // Combat stats
-                    lines.push(Line::from(vec![
-                        Span::styled("⚔ ", Style::default().fg(theme.primary)),
-                        Span::styled(format!("{}", participant.base_participant.combat_stats.attack_value),
-                            Style::default().fg(theme.accent)),
-                        Span::styled("  🛡 ", Style::default().fg(theme.info)),
-                        Span::styled(format!("{}", participant.base_participant.combat_stats.defensive_value),
-                            Style::default().fg(theme.info)),
-                    ]));
-
-                    // Distance
-                    if let Some(current) = tactical_combat_state.participants.get(tactical_combat_state.current_participant_index) {
-                        let distance = current.position.manhattan_distance_to(cursor_pos);
-                        let dist_color = if distance <= 1 { theme.success } else if distance <= 5 { theme.warning } else { theme.text_secondary };
-                        lines.push(Line::from(vec![
-                            Span::styled("📍 ", Style::default().fg(dist_color)),
-                            Span::styled(format!("{}m", distance), Style::default().fg(dist_color)),
-                        ]));
-                    }
-
-                    // Movement
-                    let move_color = if participant.movement_remaining > 0 { theme.success } else { theme.text_muted };
-                    lines.push(Line::from(vec![
-                        Span::styled("🏃 ", Style::default().fg(move_color)),
-                        Span::styled(format!("{}/{}",
-                            participant.movement_remaining,
-                            participant.movement_capabilities.movement_speed),
-                            Style::default().fg(move_color)),
-                    ]));
-                }
-            }
-        }
-
-        if !found_target {
-            lines.push(Line::from(vec![
-                Span::styled("🎯 ", Style::default().fg(theme.text_muted)),
-                Span::styled("No Target", Style::default().fg(theme.text_muted)),
-            ]));
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("Move cursor over", Style::default().fg(theme.text_secondary)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("an enemy to see", Style::default().fg(theme.text_secondary)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled("their information", Style::default().fg(theme.text_secondary)),
-            ]));
-        }
-        
-        let panel = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("🎯 Target Info")
-                .border_style(Style::default().fg(border_color)))
-            .style(Style::default().bg(theme.background));
-
-        f.render_widget(panel, area);
-    }
-    
-    fn draw_spell_details_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let is_active = tactical_combat_state.active_panel == CombatPanel::SpellDetails;
-        let border_color = if is_active { Color::Yellow } else { Color::DarkGray };
-        
-        let mut lines = vec![
-            Line::from(Span::styled("SPELL DETAILS", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
-            Line::from(""),
-        ];
-        
-        if let Some((_spell_name, spell)) = tactical_combat_state.available_spells.get(tactical_combat_state.selected_spell_index) {
-            lines.push(Line::from(Span::styled(&spell.name, Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))));
-            lines.push(Line::from(format!("Cost: {} SP", spell.cost)));
-            lines.push(Line::from(format!("Level: {}", spell.level)));
-            lines.push(Line::from(format!("Success: {}%", spell.success_chance_base)));
-            lines.push(Line::from(""));
-            lines.push(Line::from(spell.description.clone()));
-        } else {
-            lines.push(Line::from("No spell selected"));
-            lines.push(Line::from(""));
-            lines.push(Line::from("Select a spell from"));
-            lines.push(Line::from("the Skills panel to"));
-            lines.push(Line::from("see detailed info"));
-        }
-        
-        let panel = Paragraph::new(lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Spell Details")
-                .border_style(Style::default().fg(border_color)));
-        
-        f.render_widget(panel, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_navigation_controls(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let nav_mode_text = match tactical_combat_state.navigation_mode {
-            NavigationMode::PanelNavigation => "Panel Navigation (Shift+HJKL)",
-            NavigationMode::WithinPanel => "Within Panel (HJKL)",
-            NavigationMode::Movement => "Battlefield Movement (WASD)",
-        };
-        
-        let active_panel_name = match tactical_combat_state.active_panel {
-            CombatPanel::Battlefield => "Battlefield",
-            CombatPanel::Movement => "Movement",
-            CombatPanel::Combat => "Combat", 
-            CombatPanel::Skills => "Skills",
-            CombatPanel::CharacterInfo => "Character Info",
-            CombatPanel::TargetInfo => "Target Info",
-            CombatPanel::SkillsAvailable => "Skills Available",
-            CombatPanel::Inventory => "Inventory",
-            CombatPanel::SpellDetails => "Spell Details",
-        };
-        
-        let controls_text = vec![
-            Line::from(vec![
-                Span::styled("Mode: ", Style::default().fg(Color::Gray)),
-                Span::styled(nav_mode_text, Style::default().fg(Color::Yellow)),
-                Span::raw(" | "),
-                Span::styled("Active: ", Style::default().fg(Color::Gray)),
-                Span::styled(active_panel_name, Style::default().fg(Color::Cyan)),
-            ]),
-            Line::from(vec![
-                Span::styled("Shift+HJKL: ", Style::default().fg(Color::Green)),
-                Span::raw("Switch Panels | "),
-                Span::styled("HJKL: ", Style::default().fg(Color::Green)), 
-                Span::raw("Navigate Items | "),
-                Span::styled("WASD: ", Style::default().fg(Color::Green)),
-                Span::raw("Move Player | "),
-                Span::styled("Enter: ", Style::default().fg(Color::Green)),
-                Span::raw("Select"),
-            ]),
-        ];
-        
-        let controls = Paragraph::new(controls_text)
-            .style(Style::default().fg(Color::Gray))
-            .alignment(Alignment::Center)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Controls")
-                .border_style(Style::default().fg(Color::DarkGray)));
-        
-        f.render_widget(controls, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_action_menu(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let action_descriptions = [
-            ("Move Only", "Move without attacking"),
-            ("Attack", "Melee or ranged attack"),
-            ("Cast Spell", "Use magic abilities"),
-            ("Use Item/Potion", "Consume items for effects"),
-            ("Switch Weapon", "Change equipped weapon"),
-            ("Defend", "Defensive stance"),
-            ("End Turn", "Skip to next participant"),
-            ("Interact", "Use environment features"),
-        ];
-        
-        let menu_items: Vec<ListItem> = tactical_combat_state.available_actions
-            .iter()
-            .enumerate()
-            .map(|(i, action)| {
-                // Use different colors and icons to make actions more distinct
-                let (style, prefix) = if i == tactical_combat_state.selected_action_index {
-                    (Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD), ">>> ")
-                } else {
-                    match action.as_str() {
-                        "Move Only" => (Style::default().fg(Color::LightBlue), "🚶 "),
-                        "Attack" => (Style::default().fg(Color::LightRed), "⚔️ "),
-                        "Cast Spell" => (Style::default().fg(Color::Magenta), "✨ "),
-                        "Use Item/Potion" => (Style::default().fg(Color::LightGreen), "🧪 "),
-                        "Switch Weapon" => (Style::default().fg(Color::LightYellow), "🗡️ "),
-                        "Defend" => (Style::default().fg(Color::Cyan), "🛡️ "),
-                        "End Turn" => (Style::default().fg(Color::DarkGray), "⏭️ "),
-                        "Interact" => (Style::default().fg(Color::LightCyan), "🔧 "),
-                        _ => (Style::default().fg(Color::White), "• "),
-                    }
-                };
-                
-                // Find description for this action
-                let description = action_descriptions.iter()
-                    .find(|(name, _)| name == action)
-                    .map(|(_, desc)| *desc)
-                    .unwrap_or("Unknown action");
-                
-                let display_text = if i == tactical_combat_state.selected_action_index {
-                    format!("{}{}\n  📝 {}", prefix, action, description)
-                } else {
-                    format!("{}{}", prefix, action)
-                };
-                
-                ListItem::new(display_text).style(style)
-            })
-            .collect();
-        
-        let title = if let Some(participant) = tactical_combat_state.get_current_participant() {
-            if participant.base_participant.is_player {
-                "⚡ Your Actions (↑↓ to select)"
-            } else {
-                "🤖 AI Actions"
-            }
-        } else {
-            "Actions (↑↓ to select)"
-        };
-        
-        let menu_widget = List::new(menu_items)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(Style::default().fg(Color::Yellow)));
-        
-        f.render_widget(menu_widget, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_tactical_controls(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        // Compact controls for horizontal layout
-        let control_text = match tactical_combat_state.combat_phase {
-            CombatPhase::TacticalMovement => vec![
-                Line::from("Movement Controls:"),
-                Line::from("WASD/HJKL: Move cursor"),
-                Line::from("ENTER: Move here"),
-                Line::from("Q: Quick actions"),
-                Line::from("E: End turn"),
-                Line::from("TAB: Action menu"),
-            ],
-            CombatPhase::TacticalActionSelection => vec![
-                Line::from("Action Selection:"),
-                Line::from("↑↓/JK: Select action"),
-                Line::from("ENTER: Confirm"),
-                Line::from("ESC: Back to movement"),
-                Line::from(""),
-                Line::from("Available actions:"),
-                Line::from("Move Only, Attack, Cast"),
-                Line::from("Use Item, Switch Weapon"),
-            ],
-            CombatPhase::TacticalTargeting => vec![
-                Line::from("Targeting:"),
-                Line::from("WASD/HJKL: Move cursor"),
-                Line::from("ENTER: Confirm target"),
-                Line::from("ESC: Cancel action"),
-                Line::from(""),
-                Line::from("Yellow: Valid targets"),
-                Line::from("Cyan: Spell targets"),
-            ],
-            CombatPhase::TacticalEnvironmentalInteraction => vec![
-                Line::from("Environment:"),
-                Line::from("↑↓/JK: Select"),
-                Line::from("ENTER: Activate"),
-                Line::from("ESC: Cancel"),
-            ],
-            CombatPhase::CombatComplete(_) => vec![
-                Line::from("Complete!"),
-                Line::from("ENTER: Continue"),
-            ],
-            // Forge Combat Phases
-            CombatPhase::ForgeInitiativeRoll => vec![
-                Line::from("Rolling Initiative..."),
-                Line::from("Press any key to continue"),
-            ],
-            CombatPhase::ForgeActionDeclaration => vec![
-                Line::from("Declare Action:"),
-                Line::from("1-6: Select action"),
-                Line::from("F: Full Forge mode"),
-                Line::from("TAB: Next participant"),
-            ],
-            CombatPhase::ForgeActionResolution => vec![
-                Line::from("Resolving Actions..."),
-                Line::from("SPACE: Next action"),
-                Line::from("Auto-resolving..."),
-            ],
-            CombatPhase::ForgeCombatMinuteEnd => vec![
-                Line::from("Combat Minute End"),
-                Line::from("ENTER: Next minute"),
-                Line::from("ESC: Exit combat"),
-            ],
-            _ => vec![Line::from("Unknown phase")],
-        };
-        
-        let controls_widget = Paragraph::new(control_text)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Controls")
-                .border_style(Style::default().fg(Color::DarkGray)));
-        
-        f.render_widget(controls_widget, area);
-    }
-    
-    #[allow(dead_code)]
-    fn draw_tactical_status(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let players_alive = tactical_combat_state.participants.iter()
-            .filter(|p| p.base_participant.is_player && p.base_participant.is_alive())
-            .count();
-        let enemies_alive = tactical_combat_state.participants.iter()
-            .filter(|p| !p.base_participant.is_player && p.base_participant.is_alive())
-            .count();
-        
-        // Determine location context
-        let location_context = if let Some(ref dungeon_state) = tactical_combat_state.return_to_dungeon {
-            format!("Dungeon Lv{}", dungeon_state.dungeon.current_floor + 1)
-        } else {
-            "Overworld".to_string()
-        };
-        
-        // Compact status display for horizontal layout
-        let mut status_text = vec![
-            Line::from(vec![Span::styled(
-                location_context,
-                Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)
-            )]),
-        ];
-        
-        // Show different info based on combat mode
-        match tactical_combat_state.combat_phase {
-            CombatPhase::ForgeInitiativeRoll | CombatPhase::ForgeActionDeclaration | 
-            CombatPhase::ForgeActionResolution | CombatPhase::ForgeCombatMinuteEnd => {
-                status_text.extend(vec![
-                    Line::from(vec![
-                        Span::styled("⚔️ FORGE COMBAT MODE", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                    ]),
-                    Line::from(format!("Combat Minute: {}", tactical_combat_state.combat_minute)),
-                    Line::from(format!("Actions Declared: {}/{}", tactical_combat_state.actions_declared.len(), tactical_combat_state.participants.len())),
-                ]);
-            },
-            _ => {
-                status_text.extend(vec![
-                    Line::from(format!("Round: {}", tactical_combat_state.round)),
-                    Line::from("Press F for Forge Combat"),
-                ]);
-            }
-        }
-        
-        status_text.extend(vec![
-            Line::from(format!("Players: {}  Enemies: {}", players_alive, enemies_alive)),
-            Line::from("@ = Player  E = Enemy"),
-            Line::from(". = Open  # = Wall"),
-            Line::from("~ = Difficult  ▣ = Cover"),
-        ]);
-        
-        let status_widget = Paragraph::new(status_text)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Status")
-                .border_style(Style::default().fg(Color::Blue)));
-        
-        f.render_widget(status_widget, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_spell_menu(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let spell_items: Vec<ListItem> = tactical_combat_state.available_spells
-            .iter()
-            .enumerate()
-            .map(|(i, (name, spell))| {
-                let style = if i == tactical_combat_state.selected_spell_index {
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::REVERSED)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                
-                // Show spell info: name, cost, range
-                let mut info = format!("{} ({}SP", name, spell.cost);
-                if let Some(tactical_info) = &spell.tactical_info {
-                    info.push_str(&format!(", Rng:{}", tactical_info.range));
-                }
-                info.push(')');
-                
-                ListItem::new(info).style(style)
-            })
-            .collect();
-        
-        let spell_list = List::new(spell_items)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Select Spell")
-                .border_style(Style::default().fg(Color::Cyan)));
-        
-        f.render_widget(spell_list, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_compact_tactical_battlefield(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let battlefield = &tactical_combat_state.battlefield;
-        let cursor_pos = &tactical_combat_state.cursor_position;
-        
-        // Calculate compact viewport - fit to actual combat area with minimal padding
-        let participants = &tactical_combat_state.participants;
-        let mut min_x = i32::MAX;
-        let mut max_x = i32::MIN;
-        let mut min_y = i32::MAX;
-        let mut max_y = i32::MIN;
-        
-        // Find bounds of all participants
-        for participant in participants {
-            if participant.base_participant.is_alive() {
-                min_x = min_x.min(participant.position.x);
-                max_x = max_x.max(participant.position.x);
-                min_y = min_y.min(participant.position.y);
-                max_y = max_y.max(participant.position.y);
-            }
-        }
-        
-        // Add padding around participants
-        let padding = 3;
-        min_x = (min_x - padding).max(0);
-        max_x = (max_x + padding).min(battlefield.width as i32 - 1);
-        min_y = (min_y - padding).max(0);
-        max_y = (max_y + padding).min(battlefield.height as i32 - 1);
-        
-        // Ensure minimum size
-        let min_width = 15;
-        let min_height = 10;
-        if max_x - min_x < min_width {
-            let center_x = (min_x + max_x) / 2;
-            min_x = (center_x - min_width / 2).max(0);
-            max_x = (center_x + min_width / 2).min(battlefield.width as i32 - 1);
-        }
-        if max_y - min_y < min_height {
-            let center_y = (min_y + max_y) / 2;
-            min_y = (center_y - min_height / 2).max(0);
-            max_y = (center_y + min_height / 2).min(battlefield.height as i32 - 1);
-        }
-        
-        let mut battlefield_lines = Vec::new();
-        
-        for y in min_y..=max_y {
-            let mut line_spans = Vec::new();
-            
-            for x in min_x..=max_x {
-                let pos = crate::forge::BattlefieldPosition::new(x, y);
-                let mut tile_char = '.';
-                let mut tile_color = Color::DarkGray;
-                
-                // Get terrain character and color
-                if let Some(tile) = battlefield.tiles.get(&pos) {
-                    match tile.terrain {
-                        crate::forge::TerrainFeature::Open => {
-                            tile_char = '.';
-                            tile_color = Color::DarkGray;
-                        }
-                        crate::forge::TerrainFeature::Obstacle => {
-                            tile_char = '#';
-                            tile_color = Color::Gray;
-                        }
-                        crate::forge::TerrainFeature::DifficultTerrain => {
-                            tile_char = '~';
-                            tile_color = Color::Yellow;
-                        }
-                        crate::forge::TerrainFeature::Cover => {
-                            tile_char = '▣';
-                            tile_color = Color::Green;
-                        }
-                        crate::forge::TerrainFeature::Hazard => {
-                            tile_char = '^';
-                            tile_color = Color::Red;
-                        }
-                        crate::forge::TerrainFeature::Elevation => {
-                            tile_char = '▲';
-                            tile_color = Color::LightBlue;
-                        }
-                        crate::forge::TerrainFeature::Water => {
-                            tile_char = '≈';
-                            tile_color = Color::Blue;
-                        }
-                        crate::forge::TerrainFeature::Altar => {
-                            tile_char = '†';
-                            tile_color = Color::Magenta;
-                        }
-                        crate::forge::TerrainFeature::Pillar => {
-                            tile_char = '◊';
-                            tile_color = Color::Gray;
-                        }
-                        crate::forge::TerrainFeature::Pit => {
-                            tile_char = 'O';
-                            tile_color = Color::Red;
-                        }
-                    }
-                }
-                
-                // Check for participants at this position
-                for (participant_id, participant_pos) in battlefield.participant_positions.iter() {
-                    if participant_pos == &pos {
-                        if let Some(participant) = tactical_combat_state.participants.get(*participant_id) {
-                            if participant.base_participant.is_player {
-                                tile_char = '@';
-                                tile_color = Color::LightGreen;
-                            } else {
-                                tile_char = 'E';
-                                tile_color = Color::LightRed;
-                            }
-                        }
-                    }
-                }
-                
-                // Highlight cursor position
-                if cursor_pos == &pos {
-                    tile_color = Color::White;
-                    let style = Style::default().fg(tile_color).add_modifier(Modifier::BOLD | Modifier::REVERSED);
-                    line_spans.push(Span::styled(tile_char.to_string(), style));
-                } else {
-                    // Check if position is highlighted
-                    let is_highlighted = tactical_combat_state.highlighted_positions.contains(&pos);
-                    let is_valid_spell_target = tactical_combat_state.valid_spell_targets.contains(&pos);
-                    let is_spell_effect_preview = tactical_combat_state.spell_effect_preview.contains(&pos);
-                    
-                    let style = if is_spell_effect_preview {
-                        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
-                    } else if is_valid_spell_target {
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else if is_highlighted {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(tile_color)
-                    };
-                    line_spans.push(Span::styled(tile_char.to_string(), style));
-                }
-            }
-            
-            battlefield_lines.push(Line::from(line_spans));
-        }
-        
-        let battlefield_widget = Paragraph::new(battlefield_lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Tactical Battlefield")
-                .border_style(Style::default().fg(Color::Cyan)));
-        
-        f.render_widget(battlefield_widget, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_detailed_participant_info(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let info_text = if let Some(participant) = tactical_combat_state.get_current_participant() {
-            let (phase_text, phase_color) = match tactical_combat_state.combat_phase {
-                CombatPhase::TacticalMovement => ("🚶 MOVEMENT", Color::Yellow),
-                CombatPhase::TacticalActionSelection => ("⚡ ACTION SELECTION", Color::Cyan),
-                CombatPhase::TacticalTargeting => ("🎯 TARGETING", Color::Magenta),
-                CombatPhase::ForgeActionDeclaration => ("🎲 FORGE ACTION", Color::LightYellow),
-                CombatPhase::ForgeActionResolution => ("⚔️ RESOLVING", Color::Red),
-                _ => ("❓ UNKNOWN", Color::Gray),
-            };
-            
-            vec![
-                Line::from(vec![Span::styled(
-                    format!("👤 {}", participant.base_participant.name),
-                    Style::default().fg(if participant.base_participant.is_player { Color::LightGreen } else { Color::LightRed }).add_modifier(Modifier::BOLD)
-                )]),
-                Line::from(vec![Span::styled(
-                    phase_text,
-                    Style::default().fg(phase_color).add_modifier(Modifier::BOLD)
-                )]),
-                Line::from(""),
-                Line::from(format!("❤️  Health: {}/{}", 
-                    participant.base_participant.combat_stats.hit_points.current,
-                    participant.base_participant.combat_stats.hit_points.max)),
-                Line::from(format!("🏃 Movement: {}/{}", 
-                    participant.movement_remaining, 
-                    participant.movement_capabilities.movement_speed)),
-                Line::from(format!("📍 Position: ({},{})", 
-                    participant.position.x, 
-                    participant.position.y)),
-                Line::from(format!("⚔️  Attack: {}  🛡️  Defense: {}", 
-                    participant.base_participant.combat_stats.attack_value,
-                    participant.base_participant.combat_stats.defensive_value)),
-            ]
-        } else {
-            vec![Line::from("No active participant")]
-        };
-        
-        let info_widget = Paragraph::new(info_text)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("🎮 Current Participant")
-                .border_style(Style::default().fg(Color::Green)));
-        
-        f.render_widget(info_widget, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_actions_spells_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        if tactical_combat_state.action_menu_open {
-            // Show action menu when open
-            Self::draw_action_menu(f, area, tactical_combat_state);
-        } else if tactical_combat_state.spell_menu_open {
-            // Show spell menu when open
-            Self::draw_spell_menu(f, area, tactical_combat_state);
-        } else {
-            // Show available actions summary
-            let content = vec![
-                Line::from(vec![Span::styled("Available Actions:", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))]),
-                Line::from(""),
-                Line::from("🚶 Move Only - Move without attacking"),
-                Line::from("⚔️ Attack - Melee or ranged combat"),
-                Line::from("✨ Cast Spell - Use magical abilities"),
-                Line::from("🧪 Use Item - Consume potions/items"),
-                Line::from("🗡️ Switch Weapon - Change equipment"),
-                Line::from("🛡️ Defend - Defensive stance"),
-                Line::from("⏭️ End Turn - Skip to next participant"),
-            ];
-            
-            let panel = Paragraph::new(content)
-                .block(Block::default()
-                    .borders(Borders::ALL)
-                    .title("⚡ Actions & Spells")
-                    .border_style(Style::default().fg(Color::Yellow)));
-            
-            f.render_widget(panel, area);
-        }
-    }
-
-    #[allow(dead_code)]
-    fn draw_combat_statistics(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat_state: &TacticalCombatState) {
-        let players_alive = tactical_combat_state.participants.iter()
-            .filter(|p| p.base_participant.is_player && p.base_participant.is_alive())
-            .count();
-        let enemies_alive = tactical_combat_state.participants.iter()
-            .filter(|p| !p.base_participant.is_player && p.base_participant.is_alive())
-            .count();
-        
-        let total_players = tactical_combat_state.participants.iter()
-            .filter(|p| p.base_participant.is_player)
-            .count();
-        let total_enemies = tactical_combat_state.participants.iter()
-            .filter(|p| !p.base_participant.is_player)
-            .count();
-        
-        let content = vec![
-            Line::from(vec![
-                Span::styled("👥 Combatants Alive:", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-            ]),
-            Line::from(""),
-            Line::from(format!("🟢 Players: {}/{}", players_alive, total_players)),
-            Line::from(format!("🔴 Enemies: {}/{}", enemies_alive, total_enemies)),
-            Line::from(format!("⏱️  Round: {}", tactical_combat_state.round)),
-            Line::from(format!("🎲 Combat Minute: {}", tactical_combat_state.combat_minute)),
-        ];
-        
-        let stats_widget = Paragraph::new(content)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("📊 Combat Stats")
-                .border_style(Style::default().fg(Color::Blue)));
-        
-        f.render_widget(stats_widget, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_integrated_tactical_combat(f: &mut Frame, area: ratatui::layout::Rect, dungeon_state: &DungeonExplorationState, tactical_combat: &TacticalCombatState, _current_character: Option<&crate::forge::ForgeCharacter>) {
-        // Four-column layout: smaller battlefield, action panels, info panels, extra panel
-        let main_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(25), // Smaller battlefield area
-                Constraint::Percentage(25), // Action panels
-                Constraint::Percentage(25), // Info panels  
-                Constraint::Percentage(25), // Equipment & inventory panel
-            ])
-            .split(area);
-        
-        // Action column: movement, combat, skills panels
-        let action_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(8),  // Movement options
-                Constraint::Length(8),  // Combat actions
-                Constraint::Length(8),  // Skills/spells
-                Constraint::Min(1),     // Remaining space
-            ])
-            .split(main_chunks[1]);
-        
-        // Battlefield column: title + smaller battlefield
-        let battlefield_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),  // Title
-                Constraint::Percentage(67), // Battlefield (2/3 height)
-                Constraint::Min(3),     // Quick status
-            ])
-            .split(main_chunks[0]);
-        
-        // Info column: status, target info, combat log
-        let info_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(8),  // Current participant status
-                Constraint::Length(8),  // Target information
-                Constraint::Min(10),    // Combat log
-                Constraint::Length(3),  // Controls hint
-            ])
-            .split(main_chunks[2]);
-        
-        // Equipment column: equipment, inventory, effects
-        let equipment_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(10), // Equipment panel
-                Constraint::Length(8),  // Inventory panel
-                Constraint::Min(5),     // Active effects panel
-            ])
-            .split(main_chunks[3]);
-        
-        // Draw battlefield title
-        let title_text = match tactical_combat.combat_phase {
-            CombatPhase::ForgeInitiativeRoll | CombatPhase::ForgeActionDeclaration | 
-            CombatPhase::ForgeActionResolution | CombatPhase::ForgeCombatMinuteEnd => {
-                format!("{} - Floor {} - FORGE COMBAT - Minute {}", 
-                    dungeon_state.dungeon.name, 
-                    dungeon_state.dungeon.current_floor + 1,
-                    tactical_combat.combat_minute)
-            },
-            _ => {
-                format!("{} - Floor {} - TACTICAL COMBAT - Round {}", 
-                    dungeon_state.dungeon.name, 
-                    dungeon_state.dungeon.current_floor + 1,
-                    tactical_combat.round)
-            }
-        };
-        let title = Paragraph::new(title_text)
-            .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Red)));
-        f.render_widget(title, battlefield_chunks[0]);
-        
-        // Draw smaller battlefield
-        Self::draw_tactical_battlefield(f, battlefield_chunks[1], tactical_combat);
-        
-        // Draw quick battlefield status
-        Self::draw_quick_battlefield_status(f, battlefield_chunks[2], tactical_combat);
-        
-        // Draw action panels
-        Self::draw_movement_panel(f, action_chunks[0], tactical_combat);
-        Self::draw_combat_panel(f, action_chunks[1], tactical_combat);
-        Self::draw_skills_panel(f, action_chunks[2], tactical_combat);
-        
-        // Draw info panels
-        Self::draw_current_participant_info(f, info_chunks[0], tactical_combat);
-        Self::draw_target_info(f, info_chunks[1], tactical_combat);
-        Self::draw_combat_log(f, info_chunks[2], tactical_combat);
-        Self::draw_navigation_hints(f, info_chunks[3], tactical_combat);
-        
-        // Draw equipment panels
-        Self::draw_equipment_panel(f, equipment_chunks[0], tactical_combat);
-        Self::draw_inventory_panel(f, equipment_chunks[1], tactical_combat);
-        Self::draw_effects_panel(f, equipment_chunks[2], tactical_combat);
-        
-        // PROPER RATATUI PATTERN: Only render ONE modal at a time, in proper order
-        // Check for active modals in priority order (spell selection takes precedence)
-        if tactical_combat.spell_menu_open && matches!(tactical_combat.combat_phase, CombatPhase::TacticalActionSelection) {
-            // Spell selection modal has highest priority
-            Self::draw_forge_spell_selection_overlay(f, area, tactical_combat);
-        } else if matches!(tactical_combat.combat_phase, CombatPhase::ForgeActionDeclaration) {
-            // Action declaration modal
-            Self::draw_forge_action_declaration_overlay(f, area, tactical_combat);
-        }
-        // If no modals are active, the main UI elements above are visible
-    }
-
-    #[allow(dead_code)]
-    fn draw_forge_action_declaration_overlay(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState) {
-        // Create a centered overlay for action selection
-        let popup_area = Self::centered_rect(60, 70, area);
-        
-        // PROPER RATATUI PATTERN: Use Clear widget to reset the area first
-        f.render_widget(Clear, popup_area);
-        
-        // Then render the popup block
-        f.render_widget(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Declare Action for Combat Minute")
-                .border_style(Style::default().fg(Color::Yellow)),
-            popup_area
-        );
-        
-        // Inner area for content - use margin(1) for proper spacing as per ratatui best practices
-        let inner_area = popup_area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
-        
-        // Split into current participant info and action options
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(6),   // Current participant info
-                Constraint::Min(0),      // Action options
-                Constraint::Length(4),   // Instructions
-            ])
-            .split(inner_area);
-        
-        // Current participant info
-        if let Some(participant) = tactical_combat.get_current_participant() {
-            let participant_info = vec![
-                Line::from(vec![
-                    Span::styled("Current: ", Style::default().fg(Color::White)),
-                    Span::styled(&participant.base_participant.name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-                ]),
-                Line::from(format!("HP: {}/{}", 
-                    participant.base_participant.combat_stats.hit_points.current,
-                    participant.base_participant.combat_stats.hit_points.max)),
-                Line::from(format!("AV: {} | DV: {}", 
-                    participant.base_participant.get_total_attack_value(),
-                    participant.base_participant.get_total_defense_value())),
-                Line::from(""),
-                Line::from("Choose your action for this combat minute:"),
-            ];
-            
-            let info_widget = Paragraph::new(participant_info)
-                .block(Block::default()
-                    .borders(Borders::ALL)
-                    .title("Current Participant"));
-            f.render_widget(info_widget, chunks[0]);
-        }
-        
-        // Action options
-        let actions = vec![
-            ("1", "Melee Attack", "Attack an adjacent enemy with weapon"),
-            ("2", "Missile Attack", "Shoot at distant enemy"),
-            ("3", "Cast Spell", "Use magical abilities"),
-            ("4", "Defend", "Designate prime opponent, gain DV bonus"),
-            ("5", "Use Item", "Consume item (potion, scroll, etc.)"),
-            ("6", "Wait", "Take no action this minute"),
-        ];
-        
-        let action_items: Vec<ListItem> = actions.iter().map(|(key, name, desc)| {
-            ListItem::new(vec![
-                Line::from(vec![
-                    Span::styled(format!("{}: ", key), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                    Span::styled(*name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                ]),
-                Line::from(vec![
-                    Span::styled("    ", Style::default()),
-                    Span::styled(*desc, Style::default().fg(Color::Gray)),
-                ]),
-            ])
-        }).collect();
-        
-        let actions_list = List::new(action_items)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Available Actions")
-                .border_style(Style::default().fg(Color::Green)));
-        f.render_widget(actions_list, chunks[1]);
-        
-        // Instructions
-        let instructions = vec![
-            Line::from("Press 1-6 to select action | TAB: Skip to next participant"),
-            Line::from("ESC: Exit Forge combat | F: Toggle full Forge mode"),
-        ];
-        
-        let instructions_widget = Paragraph::new(instructions)
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("Controls"));
-        f.render_widget(instructions_widget, chunks[2]);
-    }
-
-    #[allow(dead_code)]
-    fn draw_forge_spell_selection_overlay(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState) {
-        // Create a larger, full-screen overlay for enhanced spell selection
-        let popup_area = Self::centered_rect(95, 90, area);
-        
-        // PROPER RATATUI PATTERN: Use Clear widget to reset the area first
-        f.render_widget(Clear, popup_area);
-        
-        // Then render the popup block
-        f.render_widget(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("🔮 Forge Spell Casting System 🔮")
-                .border_style(Style::default().fg(Color::Magenta)),
-            popup_area
-        );
-        
-        // Inner area for content - use margin(1) for proper spacing as per ratatui best practices  
-        let inner_area = popup_area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
-        
-        if tactical_combat.enhancement_menu_open {
-            Self::draw_spell_enhancement_interface(f, inner_area, tactical_combat);
-        } else {
-            Self::draw_spell_list_interface(f, inner_area, tactical_combat);
-        }
-    }
-
-    #[allow(dead_code)]
-    fn draw_spell_list_interface(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState) {
-        // Split into three columns: spell list, spell details, current character info
-        let main_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(40),  // Spell list
-                Constraint::Percentage(35),  // Spell details
-                Constraint::Percentage(25),  // Character info
-            ])
-            .split(area);
-        
-        // Left: Spell list
-        let spell_items: Vec<ListItem> = tactical_combat.available_spells
-            .iter()
-            .enumerate()
-            .map(|(i, (name, spell))| {
-                let is_selected = i == tactical_combat.selected_spell_index;
-                let style = if is_selected {
-                    Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                
-                let school_color = match spell.school {
-                    crate::forge::magic::MagicSchool::Elemental => Color::Red,
-                    crate::forge::magic::MagicSchool::Divine => Color::Yellow,
-                    crate::forge::magic::MagicSchool::Necromancer => Color::Gray,
-                    crate::forge::magic::MagicSchool::Beast => Color::Green,
-                    crate::forge::magic::MagicSchool::Enchantment => Color::Blue,
-                };
-                
-                ListItem::new(vec![
-                    Line::from(vec![
-                        Span::styled(format!("{} ", name), style),
-                        Span::styled(format!("({} SP)", spell.cost), 
-                            if is_selected { Style::default().fg(Color::Black).bg(Color::Cyan) } 
-                            else { Style::default().fg(Color::Gray) }
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("  ", style),
-                        Span::styled(format!("{:?}", spell.school), 
-                            if is_selected { Style::default().fg(Color::Black).bg(Color::Cyan) } 
-                            else { Style::default().fg(school_color) }
-                        ),
-                    ]),
-                ])
-            })
-            .collect();
-        
-        let spells_list = List::new(spell_items)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("📜 Available Spells")
-                .border_style(Style::default().fg(Color::Green))
-                .style(Style::default().bg(Color::Black)));
-        f.render_widget(spells_list, main_chunks[0]);
-        
-        // Middle: Spell details and enhancement options
-        if let Some((_, selected_spell)) = tactical_combat.available_spells.get(tactical_combat.selected_spell_index) {
-            Self::draw_spell_enhancement_panel(f, main_chunks[1], selected_spell);
-        }
-        
-        // Right: Character info and instructions
-        Self::draw_spell_character_info(f, main_chunks[2], tactical_combat);
-    }
-
-    #[allow(dead_code)]
-    fn draw_spell_enhancement_panel(f: &mut Frame, area: ratatui::layout::Rect, spell: &crate::forge::magic::Spell) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(8),   // Spell details
-                Constraint::Length(6),   // Enhancement info
-                Constraint::Min(0),      // Enhancement options
-                Constraint::Length(4),   // Instructions
-            ])
-            .split(area);
-        
-        // Spell details
-        let details = vec![
-            Line::from(vec![
-                Span::styled("Level: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(spell.level.to_string(), Style::default().fg(Color::Yellow)),
-            ]),
-            Line::from(vec![
-                Span::styled("Base Cost: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{} SP", spell.cost), Style::default().fg(Color::Cyan)),
-            ]),
-            Line::from(vec![
-                Span::styled("Success Rate: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{}%", spell.success_chance_base), Style::default().fg(Color::Green)),
-            ]),
-            Line::from(vec![
-                Span::styled("Backfire Risk: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{}%", spell.backfire_chance), Style::default().fg(Color::Red)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Description:", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(vec![
-                Span::styled(spell.description.clone(), Style::default().fg(Color::LightBlue)),
-            ]),
-        ];
-        
-        let details_widget = Paragraph::new(details)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("✨ Spell Details")
-                .border_style(Style::default().fg(Color::Blue))
-                .style(Style::default().bg(Color::Black)));
-        f.render_widget(details_widget, chunks[0]);
-        
-        // Enhancement info
-        let enhancement_info = vec![
-            Line::from(vec![
-                Span::styled("Enhancement Cost: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("+{} SP per pump", spell.additional_spell_points), Style::default().fg(Color::Yellow)),
-            ]),
-            Line::from(vec![
-                Span::styled("Max Pumps: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(spell.max_pumps.to_string(), Style::default().fg(Color::Green)),
-            ]),
-            Line::from(vec![
-                Span::styled("Component Break: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{}% base risk", spell.component_break_chance), Style::default().fg(Color::Red)),
-            ]),
-        ];
-        
-        let enhancement_widget = Paragraph::new(enhancement_info)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("⚡ Enhancement Info")
-                .border_style(Style::default().fg(Color::Yellow))
-                .style(Style::default().bg(Color::Black)));
-        f.render_widget(enhancement_widget, chunks[1]);
-        
-        // Enhancement options
-        let options = vec![
-            Line::from("🔮 Enhancement Options:"),
-            Line::from(""),
-            Line::from("📏 Range: Extend spell reach"),
-            Line::from("⏱️  Duration: Increase effect time"),
-            Line::from("💥 Damage: Boost spell power"),
-            Line::from("🛡️  Save Modifier: Harder to resist"),
-            Line::from("🎯 Success: Better casting chance"),
-        ];
-        
-        let options_widget = Paragraph::new(options)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("🌟 Available Enhancements")
-                .border_style(Style::default().fg(Color::Magenta))
-                .style(Style::default().bg(Color::Black)));
-        f.render_widget(options_widget, chunks[2]);
-        
-        // Instructions
-        let instructions = vec![
-            Line::from("ENTER: Cast spell normally | E: Enhance spell"),
-            Line::from("↑↓: Select spell | ESC: Cancel"),
-        ];
-        
-        let instructions_widget = Paragraph::new(instructions)
-            .style(Style::default().fg(Color::DarkGray).bg(Color::Black))
-            .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).title("⌨️ Controls")
-                .style(Style::default().bg(Color::Black)));
-        f.render_widget(instructions_widget, chunks[3]);
-    }
-
-    #[allow(dead_code)]
-    fn draw_spell_character_info(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState) {
-        if let Some(participant) = tactical_combat.get_current_participant() {
-            let character_info = vec![
-                Line::from(vec![
-                    Span::styled("Caster: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(participant.base_participant.name.clone(), Style::default().fg(Color::Cyan)),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("Spell Points: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(
-                        format!("{}/{}", 
-                            participant.base_participant.magic.spell_points.current,
-                            participant.base_participant.magic.spell_points.max
-                        ), 
-                        Style::default().fg(Color::Green)
-                    ),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("Magic Schools:", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                ]),
-            ];
-            
-            let mut all_lines = character_info;
-            for (school, skill) in &participant.base_participant.magic.school_skills {
-                all_lines.push(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(format!("{}: ", school), Style::default().fg(Color::Yellow)),
-                    Span::styled(skill.to_string(), Style::default().fg(Color::White)),
-                ]));
-            }
-            
-            let character_widget = Paragraph::new(all_lines)
-                .block(Block::default()
-                    .borders(Borders::ALL)
-                    .title("🧙 Caster Info")
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .style(Style::default().bg(Color::Black)));
-            f.render_widget(character_widget, area);
-        }
-    }
-
-    #[allow(dead_code)]
-    fn draw_spell_enhancement_interface(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState) {
-        if let Some((_spell_name, spell)) = tactical_combat.available_spells.get(tactical_combat.selected_spell_index) {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(50),  // Enhancement selection
-                    Constraint::Percentage(25),  // Spell preview
-                    Constraint::Percentage(25),  // Cost & risk info
-                ])
-                .split(area);
-            
-            // Left: Enhancement selection
-            Self::draw_enhancement_selection(f, chunks[0], tactical_combat, spell);
-            
-            // Middle: Enhanced spell preview
-            Self::draw_enhanced_spell_preview(f, chunks[1], tactical_combat, spell);
-            
-            // Right: Cost and risk information
-            Self::draw_enhancement_costs(f, chunks[2], tactical_combat, spell);
-        }
-    }
-
-    #[allow(dead_code)]
-    fn draw_enhancement_selection(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState, spell: &crate::forge::magic::Spell) {
-        let enhancement = &tactical_combat.current_enhancement;
-        
-        let enhancement_items: Vec<ListItem> = tactical_combat.enhancement_categories
-            .iter()
-            .enumerate()
-            .map(|(i, category)| {
-                let is_selected = i == tactical_combat.selected_enhancement_category;
-                let is_enhanced = match i {
-                    0 => enhancement.enhanced_range,
-                    1 => enhancement.enhanced_duration,
-                    2 => enhancement.enhanced_damage,
-                    3 => enhancement.enhanced_save_modifier,
-                    4 => enhancement.enhanced_success_chance,
-                    _ => false,
-                };
-                
-                let style = if is_selected {
-                    if is_enhanced {
-                        Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
-                    }
-                } else if is_enhanced {
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                
-                let icon = if is_enhanced { "✓" } else { "○" };
-                let bonus_text = Self::get_enhancement_bonus_text(i, &spell.school);
-                
-                ListItem::new(vec![
-                    Line::from(vec![
-                        Span::styled(format!("{} {}", icon, category), style),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("  ", style),
-                        Span::styled(bonus_text, 
-                            if is_selected { 
-                                Style::default().fg(Color::Black).bg(if is_enhanced { Color::Green } else { Color::Yellow })
-                            } else { 
-                                Style::default().fg(Color::Gray) 
-                            }
-                        ),
-                    ]),
-                ])
-            })
-            .collect();
-        
-        let enhancement_list = List::new(enhancement_items)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title(format!("⚡ Enhance {} ⚡", spell.name))
-                .border_style(Style::default().fg(Color::Yellow))
-                .style(Style::default().bg(Color::Black)));
-        f.render_widget(enhancement_list, area);
-    }
-
-    #[allow(dead_code)]
-    fn get_enhancement_bonus_text(category: usize, school: &crate::forge::magic::MagicSchool) -> String {
-        let bonuses = match school {
-            crate::forge::magic::MagicSchool::Beast => (5, 10, 1, 1, 15),
-            crate::forge::magic::MagicSchool::Elemental => (15, 2, 3, 1, 5),
-            crate::forge::magic::MagicSchool::Necromancer => (10, 5, 2, 1, 10),
-            crate::forge::magic::MagicSchool::Enchantment => (8, 8, 1, 2, 12),
-            crate::forge::magic::MagicSchool::Divine => (12, 6, 2, 1, 8),
-        };
-        
-        match category {
-            0 => format!("+{} feet range", bonuses.0),
-            1 => format!("+{} minutes", bonuses.1),
-            2 => format!("+{} damage", bonuses.2),
-            3 => format!("-{} save mod", bonuses.3),
-            4 => format!("+{}% success", bonuses.4),
-            _ => "Unknown".to_string(),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn draw_enhanced_spell_preview(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState, spell: &crate::forge::magic::Spell) {
-        let enhancement = &tactical_combat.current_enhancement;
-        
-        let preview_text = vec![
-            Line::from(vec![
-                Span::styled("Enhanced Spell:", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(vec![
-                Span::styled(spell.name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Pumps Applied: ", Style::default().fg(Color::White)),
-                Span::styled(enhancement.pumps.to_string(), Style::default().fg(Color::Yellow)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Enhancements:", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            ]),
-        ];
-        
-        let mut all_lines = preview_text;
-        
-        if enhancement.enhanced_range {
-            all_lines.push(Line::from(vec![
-                Span::styled("• ", Style::default().fg(Color::Green)),
-                Span::styled("Extended Range", Style::default().fg(Color::Green)),
-            ]));
-        }
-        if enhancement.enhanced_duration {
-            all_lines.push(Line::from(vec![
-                Span::styled("• ", Style::default().fg(Color::Green)),
-                Span::styled("Longer Duration", Style::default().fg(Color::Green)),
-            ]));
-        }
-        if enhancement.enhanced_damage {
-            all_lines.push(Line::from(vec![
-                Span::styled("• ", Style::default().fg(Color::Green)),
-                Span::styled("Increased Damage", Style::default().fg(Color::Green)),
-            ]));
-        }
-        if enhancement.enhanced_save_modifier {
-            all_lines.push(Line::from(vec![
-                Span::styled("• ", Style::default().fg(Color::Green)),
-                Span::styled("Harder to Resist", Style::default().fg(Color::Green)),
-            ]));
-        }
-        if enhancement.enhanced_success_chance {
-            all_lines.push(Line::from(vec![
-                Span::styled("• ", Style::default().fg(Color::Green)),
-                Span::styled("Higher Success Rate", Style::default().fg(Color::Green)),
-            ]));
-        }
-        
-        if enhancement.pumps == 0 {
-            all_lines.push(Line::from(vec![
-                Span::styled("• No enhancements selected", Style::default().fg(Color::Gray)),
-            ]));
-        }
-        
-        let preview_widget = Paragraph::new(all_lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("🔮 Spell Preview")
-                .border_style(Style::default().fg(Color::Blue)));
-        f.render_widget(preview_widget, area);
-    }
-
-    #[allow(dead_code)]
-    fn draw_enhancement_costs(f: &mut Frame, area: ratatui::layout::Rect, tactical_combat: &TacticalCombatState, spell: &crate::forge::magic::Spell) {
-        let enhancement = &tactical_combat.current_enhancement;
-        
-        // Get current participant's spell points
-        let current_sp = if let Some(participant) = tactical_combat.get_current_participant() {
-            participant.base_participant.magic.spell_points.current
-        } else {
-            0
-        };
-        
-        let base_cost = spell.cost;
-        let enhancement_cost = spell.additional_spell_points * enhancement.pumps;
-        let total_cost = enhancement.total_cost;
-        let can_afford = current_sp >= total_cost as u32;
-        
-        // Calculate component break risk
-        let break_chance = spell.component_break_chance + (enhancement.pumps * 5);
-        let break_damage = if enhancement.pumps > 0 {
-            2_u32.pow(enhancement.pumps as u32)
-        } else {
-            0
-        };
-        
-        let cost_info = vec![
-            Line::from(vec![
-                Span::styled("Cost Breakdown:", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Base Cost: ", Style::default().fg(Color::White)),
-                Span::styled(format!("{} SP", base_cost), Style::default().fg(Color::Cyan)),
-            ]),
-            Line::from(vec![
-                Span::styled("Enhancement: ", Style::default().fg(Color::White)),
-                Span::styled(format!("+{} SP", enhancement_cost), Style::default().fg(Color::Yellow)),
-            ]),
-            Line::from(vec![
-                Span::styled("Total Cost: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{} SP", total_cost), 
-                    if can_afford { Style::default().fg(Color::Green).add_modifier(Modifier::BOLD) } 
-                    else { Style::default().fg(Color::Red).add_modifier(Modifier::BOLD) }
-                ),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Current SP: ", Style::default().fg(Color::White)),
-                Span::styled(format!("{}", current_sp), Style::default().fg(Color::Cyan)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Risk Info:", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(vec![
-                Span::styled("Break Chance: ", Style::default().fg(Color::White)),
-                Span::styled(format!("{}%", break_chance), Style::default().fg(Color::Red)),
-            ]),
-        ];
-        
-        let mut all_lines = cost_info;
-        
-        if break_damage > 0 {
-            all_lines.push(Line::from(vec![
-                Span::styled("Break Damage: ", Style::default().fg(Color::White)),
-                Span::styled(format!("{} HP", break_damage), Style::default().fg(Color::Red)),
-            ]));
-        }
-        
-        all_lines.push(Line::from(""));
-        all_lines.push(Line::from(vec![
-            Span::styled("Controls:", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-        ]));
-        all_lines.push(Line::from("↑↓: Select enhancement"));
-        all_lines.push(Line::from("ENTER: Toggle enhancement"));
-        all_lines.push(Line::from("C: Cast enhanced spell"));
-        all_lines.push(Line::from("ESC: Back to spell list"));
-        
-        let cost_widget = Paragraph::new(all_lines)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("💰 Cost & Risk")
-                .border_style(Style::default().fg(Color::Red)));
-        f.render_widget(cost_widget, area);
-    }
-    
-    // Helper function to create centered rectangles for popups
-    fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
-        let popup_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage((100 - percent_y) / 2),
-                Constraint::Percentage(percent_y),
-                Constraint::Percentage((100 - percent_y) / 2),
-            ])
-            .split(r);
-
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage((100 - percent_x) / 2),
-                Constraint::Percentage(percent_x),
-                Constraint::Percentage((100 - percent_x) / 2),
-            ])
-            .split(popup_layout[1])[1]
-    }
-
     // Character Sheet Panel Drawing Functions
     fn draw_basic_info_panel(f: &mut Frame, area: ratatui::layout::Rect, character: &crate::forge::ForgeCharacter) {
         let theme = framework::UITheme::forge_theme();
@@ -6916,7 +4461,8 @@ impl GameUI {
                 .title("Inventory")
                 .border_style(Style::default().fg(Color::Green)))
             .wrap(ratatui::widgets::Wrap { trim: true });
-        
+
         f.render_widget(panel, area);
     }
 }
+

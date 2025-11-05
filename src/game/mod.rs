@@ -74,6 +74,7 @@ pub struct KeyBindings {
 }
 
 // Forge combat damage calculation result
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ForgeDamageResult {
     total_damage: u32,
@@ -278,7 +279,7 @@ impl Game {
     pub fn run(&mut self) -> anyhow::Result<()> {
         loop {
             self.ui.draw(&self.state, &self.input_buffer, self.current_character.as_ref())?;
-            
+
             if let Some(event) = self.ui.handle_input()? {
                 match event {
                     Event::Key(key) => {
@@ -293,7 +294,7 @@ impl Game {
                 }
             }
         }
-        
+
         // Graceful shutdown
         self.shutdown()?;
         Ok(())
@@ -323,53 +324,93 @@ impl Game {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
             return Ok(true); // Exit game
         }
-        
+
         match &self.state {
             UIState::Welcome => {
-                // Any key proceeds to character list
-                let character_list = self.state_manager.list_characters()?;
-                let selected_index = if character_list.is_empty() { None } else { Some(0) };
-                self.state = UIState::CharacterList(character_list, selected_index);
+                // Any key proceeds to main menu
+                self.state = UIState::MainMenu;
             }
             UIState::MainMenu => {
-                // In-game menu (only accessible when a character is active)
-                match key.code {
-                    KeyCode::Char('1') => {
-                        self.state = UIState::Playing;
-                    }
-                    KeyCode::Char('2') => {
-                        // Enter world exploration directly
-                        if self.current_character.is_some() {
+                // Main menu - different options based on whether character is logged in
+                if self.current_character.is_some() {
+                    // Logged in: Options 1-5 (Return to Game, Explore, Character Menu, Logout, Quit)
+                    match key.code {
+                        KeyCode::Char('1') => {
+                            self.state = UIState::Playing;
+                        }
+                        KeyCode::Char('2') => {
+                            // Enter world exploration directly
                             self.enter_world_exploration()?;
                         }
-                    }
-                    KeyCode::Char('3') => {
-                        self.state = UIState::CharacterMenu;
-                    }
-                    KeyCode::Char('4') => {
-                        // Logout and return to character list
-                        // Save character data before logging out
-                        if let Some(character) = &self.current_character {
-                            let _ = self.state_manager.update_character(character);
+                        KeyCode::Char('3') => {
+                            self.state = UIState::CharacterMenu;
                         }
-                        self.current_character = None;
-                        self.world_manager = None;
-                        let character_list = self.state_manager.list_characters()?;
-                        let selected_index = if character_list.is_empty() { None } else { Some(0) };
-                        self.state = UIState::CharacterList(character_list, selected_index);
-                    }
-                    KeyCode::Char('5') | KeyCode::Char('q') => {
-                        // Save character data before exiting
-                        if let Some(character) = &self.current_character {
-                            let _ = self.state_manager.update_character(character);
+                        KeyCode::Char('4') => {
+                            // Logout and return to character list
+                            // Save character data before logging out
+                            if let Some(character) = &self.current_character {
+                                let _ = self.state_manager.update_character(character);
+                            }
+                            self.current_character = None;
+                            self.world_manager = None;
+                            let character_list = self.state_manager.list_characters()?;
+                            let selected_index = if character_list.is_empty() { None } else { Some(0) };
+                            self.state = UIState::CharacterList(character_list, selected_index);
                         }
-                        return Ok(true); // Exit
+                        KeyCode::Char('5') | KeyCode::Char('q') => {
+                            // Save character data before exiting
+                            if let Some(character) = &self.current_character {
+                                let _ = self.state_manager.update_character(character);
+                            }
+                            return Ok(true); // Exit
+                        }
+                        KeyCode::Char('m') => {
+                            // Quick return to game
+                            self.state = UIState::Playing;
+                        }
+                        _ => {}
                     }
-                    KeyCode::Char('m') => {
-                        // Quick return to game
-                        self.state = UIState::Playing;
+                } else {
+                    // Not logged in: Options 1-4 (Login, Create, List Characters, Quit)
+                    match key.code {
+                        KeyCode::Char('1') => {
+                            // Login to Existing Character -> go to character list
+                            let character_list = self.state_manager.list_characters()?;
+                            let selected_index = if character_list.is_empty() { None } else { Some(0) };
+                            self.state = UIState::CharacterList(character_list, selected_index);
+                        }
+                        KeyCode::Char('2') => {
+                            // Create New Character -> start character creation
+                            self.state = UIState::CharacterCreation(crate::ui::CharacterCreationState {
+                                step: crate::ui::CreationStep::Rolling,
+                                rolled_data: None,
+                                selected_race: None,
+                                character_name: None,
+                                selected_skills: Vec::new(),
+                                available_skill_points: 0,
+                                selected_spells: Vec::new(),
+                                available_spell_picks: 0,
+                                selected_gear: Vec::new(),
+                                current_selection_index: 0,
+                                available_skills_list: Vec::new(),
+                                available_spells_list: Vec::new(),
+                                available_gear_list: Vec::new(),
+                                starting_gold: 100,
+                                spent_gold: 0,
+                            });
+                        }
+                        KeyCode::Char('3') => {
+                            // List Characters -> go to character list
+                            let character_list = self.state_manager.list_characters()?;
+                            let selected_index = if character_list.is_empty() { None } else { Some(0) };
+                            self.state = UIState::CharacterList(character_list, selected_index);
+                        }
+                        KeyCode::Char('4') | KeyCode::Char('q') => {
+                            // Quit
+                            return Ok(true);
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
             UIState::CharacterCreation(creation_state) => {
@@ -477,8 +518,8 @@ impl Game {
                 // All combat now uses TacticalCombat
                 return Err(anyhow::anyhow!("Legacy combat state encountered - this should not happen"));
             }
-            UIState::TacticalCombat(tactical_combat_state) => {
-                self.handle_tactical_combat_input(key, tactical_combat_state.clone())?;
+            UIState::TacticalCombat(tactical_state) => {
+                self.handle_tactical_combat_input(key, tactical_state.clone())?;
             }
         }
         Ok(false)
@@ -542,20 +583,6 @@ impl Game {
                     ));
                 }
             }
-            UIState::TacticalCombat(tactical_state) => {
-                // Add battlefield area as clickable
-                areas.push(ClickableArea::battlefield(
-                    "battlefield".to_string(),
-                    Rect::new(2, 3, 50, 20) // Approximate battlefield area
-                ));
-                
-                // Add action buttons if available
-                if matches!(tactical_state.combat_phase, CombatPhase::TacticalActionSelection) {
-                    areas.push(ClickableArea::button("spell".to_string(), Rect::new(55, 10, 15, 1)));
-                    areas.push(ClickableArea::button("attack".to_string(), Rect::new(55, 12, 15, 1)));
-                    areas.push(ClickableArea::button("move".to_string(), Rect::new(55, 14, 15, 1)));
-                }
-            }
             UIState::WorldExploration(_) => {
                 // Add world map as clickable area
                 areas.push(ClickableArea::battlefield(
@@ -602,16 +629,18 @@ impl Game {
             }
             "spell" => {
                 // Handle spell casting in tactical combat
-                if let UIState::TacticalCombat(ref mut tactical_state) = &mut self.state {
-                    tactical_state.spell_menu_open = true;
-                }
+                // TODO: Implement spell menu in new tactical combat system
+                // if let UIState::TacticalCombat(ref mut tactical_state) = &mut self.state {
+                //     tactical_state.spell_menu_open = true;
+                // }
             }
             "close" => {
                 // Handle modal/popup close
-                if let UIState::TacticalCombat(ref mut tactical_state) = &mut self.state {
-                    tactical_state.spell_menu_open = false;
-                    tactical_state.enhancement_menu_open = false;
-                }
+                // TODO: Implement popup menus in new tactical combat system
+                // if let UIState::TacticalCombat(ref mut tactical_state) = &mut self.state {
+                //     tactical_state.spell_menu_open = false;
+                //     tactical_state.enhancement_menu_open = false;
+                // }
             }
             _ => {
                 // Unknown button, ignore
@@ -631,44 +660,8 @@ impl Game {
         Ok(())
     }
     
-    fn handle_area_click(&mut self, area_id: &str, x: u16, y: u16) -> anyhow::Result<()> {
+    fn handle_area_click(&mut self, area_id: &str, _x: u16, _y: u16) -> anyhow::Result<()> {
         match area_id {
-            "battlefield" => {
-                if let UIState::TacticalCombat(ref mut tactical_state) = &mut self.state {
-                    // Convert click coordinates to battlefield coordinates
-                    let battlefield_x = (x / 2) as i32; // Assuming 2-char wide tiles
-                    let battlefield_y = y as i32;
-                    
-                    // Handle battlefield click based on current action
-                    match &tactical_state.selected_action {
-                        Some(crate::forge::TacticalCombatAction::Move { target_position: _ }) => {
-                            // Try to move to clicked position
-                            let target_pos = crate::forge::BattlefieldPosition::new(battlefield_x, battlefield_y);
-                            if tactical_state.highlighted_positions.contains(&target_pos) {
-                                // Execute move
-                                if let Some(participant) = tactical_state.get_current_participant_mut() {
-                                    participant.position = target_pos;
-                                    tactical_state.selected_action = None;
-                                }
-                            }
-                        }
-                        Some(crate::forge::TacticalCombatAction::Attack { target_id: _ }) => {
-                            // Try to attack clicked target
-                            let target_pos = crate::forge::BattlefieldPosition::new(battlefield_x, battlefield_y);
-                            for (i, participant) in tactical_state.participants.iter().enumerate() {
-                                if participant.position == target_pos && tactical_state.available_targets.contains(&i) {
-                                    // Execute attack logic here
-                                    tactical_state.selected_action = None;
-                                    break;
-                                }
-                            }
-                        }
-                        _ => {
-                            // Default click behavior - show context options or select
-                        }
-                    }
-                }
-            }
             "worldmap" => {
                 // Handle world map clicks for movement
                 if let UIState::WorldExploration(_) = &self.state {
@@ -1410,21 +1403,21 @@ impl Game {
         
         // Store reference to current dungeon state if in dungeon
         let return_to_dungeon = if let UIState::DungeonExploration(ref dungeon_state) = self.state {
-            Some(Box::new(dungeon_state.clone()))
+            Some(dungeon_state.clone())
         } else {
             None
         };
         
         // Create tactical combat state
-        let mut tactical_combat_state = crate::ui::TacticalCombatState::new(
+        let tactical_combat_state = crate::ui::TacticalCombatState::new(
             battlefield,
             tactical_participants,
             return_to_dungeon,
         );
-        
-        // Process AI turns if combat starts with an AI participant
-        self.process_ai_turns_until_player(&mut tactical_combat_state)?;
-        
+
+        // DON'T auto-process AI turns - let player see initiative and control flow
+        // self.process_ai_turns_until_player(&mut tactical_combat_state)?;
+
         self.state = UIState::TacticalCombat(tactical_combat_state);
         
         Ok(())
@@ -2461,13 +2454,9 @@ impl Game {
     }
 
     fn handle_dungeon_exploration_input(&mut self, key: KeyEvent, mut dungeon_state: DungeonExplorationState) -> anyhow::Result<bool> {
-        // If tactical combat is active, handle it differently
-        if let Some(tactical_combat) = dungeon_state.active_tactical_combat.clone() {
-            self.handle_integrated_tactical_combat_input(key, *tactical_combat, &mut dungeon_state)?;
-            // Don't update state here - integrated handler already did it
-            return Ok(false);
-        }
-        
+        // Tactical combat is now always handled as standalone UIState::TacticalCombat
+        // No need to check for embedded combat state here
+
         // Handle normal dungeon exploration input
         {
             match key.code {
@@ -2566,15 +2555,8 @@ impl Game {
         }
         
         // Only update the game state if we're still in dungeon exploration mode
-        // (combat might have changed the state)
+        // (combat might have changed the state to UIState::TacticalCombat)
         if matches!(self.state, UIState::DungeonExploration(_)) {
-            // Check if tactical combat was initiated during this input handling
-            if let UIState::DungeonExploration(current_state) = &self.state {
-                if current_state.active_tactical_combat.is_some() {
-                    // Tactical combat was started, don't overwrite the state
-                    return Ok(false);
-                }
-            }
             self.state = UIState::DungeonExploration(dungeon_state);
         }
         
@@ -3302,7 +3284,6 @@ impl Game {
                 "Type 'H' for help with dungeon exploration.".to_string(),
             ],
             turn_count: 0,
-            active_tactical_combat: None,
         };
 
         // Calculate initial visibility based on character's vision radius and torch status
@@ -4395,23 +4376,20 @@ impl Game {
                 battlefield.participant_positions.insert(i, participant.position);
             }
             
-            // Create tactical combat state integrated with dungeon
-            let mut tactical_combat_state = crate::ui::TacticalCombatState::new(
+            // Create tactical combat state with return path to dungeon
+            let tactical_combat_state = crate::ui::TacticalCombatState::new(
                 battlefield,
                 tactical_participants,
-                None, // No need for return_to_dungeon since we're integrated
+                Some(dungeon_state.clone()), // Store dungeon state to return after combat
             );
-            
-            // Process AI turns if combat starts with an AI participant
-            self.process_ai_turns_until_player(&mut tactical_combat_state)?;
-            
-            // Integrate tactical combat into the dungeon state
-            let mut updated_dungeon_state = dungeon_state.clone();
-            updated_dungeon_state.active_tactical_combat = Some(Box::new(tactical_combat_state));
-            
-            self.state = UIState::DungeonExploration(updated_dungeon_state);
+
+            // DON'T auto-process AI turns - let player see initiative and control flow
+            // self.process_ai_turns_until_player(&mut tactical_combat_state)?;
+
+            // Transition to standalone tactical combat
+            self.state = UIState::TacticalCombat(tactical_combat_state);
         }
-        
+
         Ok(())
     }
 
@@ -4454,31 +4432,28 @@ impl Game {
                 battlefield.participant_positions.insert(i, participant.position);
             }
             
-            // Create tactical combat state with ranged advantage
+            // Create tactical combat state with return path to dungeon
             let mut tactical_combat_state = crate::ui::TacticalCombatState::new(
                 battlefield,
                 tactical_participants,
-                None, // No need for return_to_dungeon since we're integrated
+                Some(dungeon_state.clone()), // Store dungeon state to return after combat
             );
-            
+
             // Add ranged advantage message to combat log
             tactical_combat_state.combat_log.push("🏹 You struck first with a ranged attack!".to_string());
             tactical_combat_state.combat_log.push("🎯 You have tactical advantage and extra movement!".to_string());
-            
-            // Process AI turns if combat starts with an AI participant
-            self.process_ai_turns_until_player(&mut tactical_combat_state)?;
-            
-            // Integrate tactical combat into the dungeon state
-            let mut updated_dungeon_state = dungeon_state.clone();
-            updated_dungeon_state.active_tactical_combat = Some(Box::new(tactical_combat_state));
-            
-            self.state = UIState::DungeonExploration(updated_dungeon_state);
+
+            // DON'T auto-process AI turns - let player see initiative and control flow
+            // self.process_ai_turns_until_player(&mut tactical_combat_state)?;
+
+            // Transition to standalone tactical combat (stores dungeon state in return_to_dungeon)
+            self.state = UIState::TacticalCombat(tactical_combat_state);
         }
-        
+
         Ok(())
     }
 
-    fn start_dungeon_random_encounter(&mut self, character: &ForgeCharacter, dungeon_state: &crate::ui::DungeonExplorationState) -> anyhow::Result<()> {
+    fn start_dungeon_random_encounter(&mut self, character: &ForgeCharacter, _dungeon_state: &crate::ui::DungeonExplorationState) -> anyhow::Result<()> {
         // Create player tactical combatant
         let mut player_participant = CombatParticipant::from_character(character, Some(Weapon::rusty_sword()));
         player_participant.armor = Some(Armor::leather());
@@ -4531,16 +4506,13 @@ impl Game {
         
         // Add random encounter message
         tactical_combat_state.combat_log.push("⚔️ Random encounter! Multiple enemies appear!".to_string());
-        
-        // Process AI turns if combat starts with an AI participant
-        self.process_ai_turns_until_player(&mut tactical_combat_state)?;
-        
-        // Integrate tactical combat into the dungeon state
-        let mut updated_dungeon_state = dungeon_state.clone();
-        updated_dungeon_state.active_tactical_combat = Some(Box::new(tactical_combat_state));
-        
-        self.state = UIState::DungeonExploration(updated_dungeon_state);
-        
+
+        // DON'T auto-process AI turns - let player see initiative popup and control flow
+        // self.process_ai_turns_until_player(&mut tactical_combat_state)?;
+
+        // Transition to standalone tactical combat (stores dungeon state in return_to_dungeon)
+        self.state = UIState::TacticalCombat(tactical_combat_state);
+
         Ok(())
     }
 
@@ -5138,6 +5110,324 @@ impl Game {
         Ok(())
     }
 
+    fn handle_tactical_combat_input(&mut self, key: KeyEvent, mut tactical_state: crate::ui::TacticalCombatState) -> anyhow::Result<()> {
+        match key.code {
+            // Arrow keys - move cursor
+            KeyCode::Up => {
+                tactical_state.cursor_pos.1 = (tactical_state.cursor_pos.1 - 1).max(0);
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+            KeyCode::Down => {
+                tactical_state.cursor_pos.1 = (tactical_state.cursor_pos.1 + 1).min(tactical_state.battlefield.height as i32 - 1);
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+            KeyCode::Left => {
+                tactical_state.cursor_pos.0 = (tactical_state.cursor_pos.0 - 1).max(0);
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+            KeyCode::Right => {
+                tactical_state.cursor_pos.0 = (tactical_state.cursor_pos.0 + 1).min(tactical_state.battlefield.width as i32 - 1);
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+
+            // Action hotkeys
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                // Attack action
+                tactical_state.add_log("Selected Attack action. Use arrow keys to target an enemy.".to_string());
+                tactical_state.pending_action = Some(crate::ui::PendingAction::Attack { target_index: None });
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                // Move action
+                tactical_state.add_log("Selected Move action. Use arrow keys to select destination.".to_string());
+                tactical_state.pending_action = Some(crate::ui::PendingAction::Move { destination: None });
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                // Cast spell action
+                tactical_state.add_log("Cast spell - not yet implemented.".to_string());
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+            KeyCode::Char('u') | KeyCode::Char('U') => {
+                // Use item action
+                tactical_state.add_log("Use item - not yet implemented.".to_string());
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                // Defend action
+                tactical_state.add_log("Taking defensive stance...".to_string());
+                tactical_state.pending_action = Some(crate::ui::PendingAction::Defend);
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                // Skills action
+                tactical_state.add_log("Skills - not yet implemented.".to_string());
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                // End turn
+                tactical_state.add_log("Ending turn...".to_string());
+                tactical_state.pending_action = None;
+                self.advance_turn(&mut tactical_state);
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+
+            // Enter key - confirm selection or execute command
+            KeyCode::Enter => {
+                if !tactical_state.command_buffer.is_empty() {
+                    // Execute MUD-style command
+                    let command = tactical_state.command_buffer.trim().to_lowercase();
+                    tactical_state.command_buffer.clear();
+
+                    match command.as_str() {
+                        "attack" | "a" => {
+                            tactical_state.add_log("Attack command entered. Use 'a' hotkey for faster access.".to_string());
+                            tactical_state.pending_action = Some(crate::ui::PendingAction::Attack { target_index: None });
+                        }
+                        "move" | "m" => {
+                            tactical_state.add_log("Move command entered. Use 'm' hotkey for faster access.".to_string());
+                            tactical_state.pending_action = Some(crate::ui::PendingAction::Move { destination: None });
+                        }
+                        "defend" | "d" => {
+                            tactical_state.add_log("Defending...".to_string());
+                            tactical_state.pending_action = Some(crate::ui::PendingAction::Defend);
+                        }
+                        "end" | "e" => {
+                            tactical_state.add_log("Ending turn...".to_string());
+                            tactical_state.pending_action = None;
+                            self.advance_turn(&mut tactical_state);
+                        }
+                        "help" => {
+                            tactical_state.add_log("Commands: attack, move, defend, end, quit".to_string());
+                        }
+                        "quit" | "q" => {
+                            // Exit combat
+                            if let Some(dungeon_state) = &tactical_state.return_to_dungeon {
+                                self.state = UIState::DungeonExploration(dungeon_state.clone());
+                            } else {
+                                self.state = UIState::Playing;
+                            }
+                            return Ok(());
+                        }
+                        _ => {
+                            tactical_state.add_log(format!("Unknown command: {}. Type 'help' for available commands.", command));
+                        }
+                    }
+
+                    self.state = UIState::TacticalCombat(tactical_state);
+                } else if tactical_state.pending_action.is_some() {
+                    // Confirm pending action at cursor position
+                    self.execute_tactical_action(&mut tactical_state)?;
+                    self.state = UIState::TacticalCombat(tactical_state);
+                }
+            }
+
+            // Backspace - delete character from command buffer
+            KeyCode::Backspace => {
+                tactical_state.command_buffer.pop();
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+
+            // Escape - cancel pending action or exit combat
+            KeyCode::Esc => {
+                if tactical_state.pending_action.is_some() {
+                    // Cancel pending action
+                    tactical_state.pending_action = None;
+                    tactical_state.add_log("Action cancelled.".to_string());
+                    self.state = UIState::TacticalCombat(tactical_state);
+                } else {
+                    // Exit combat
+                    if let Some(dungeon_state) = &tactical_state.return_to_dungeon {
+                        self.state = UIState::DungeonExploration(dungeon_state.clone());
+                    } else {
+                        self.state = UIState::Playing;
+                    }
+                }
+            }
+
+            // Regular character input - add to command buffer
+            KeyCode::Char(c) if !c.is_control() => {
+                // Don't add hotkey letters if not in uppercase
+                if !matches!(c, 'a'..='z') || tactical_state.command_buffer.len() > 0 {
+                    tactical_state.command_buffer.push(c);
+                    self.state = UIState::TacticalCombat(tactical_state);
+                }
+            }
+
+            _ => {
+                // Ignore other keys
+                self.state = UIState::TacticalCombat(tactical_state);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn execute_tactical_action(&mut self, tactical_state: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
+        use rand::Rng;
+
+        let pending_action = tactical_state.pending_action.clone();
+
+        match pending_action {
+            Some(crate::ui::PendingAction::Attack { target_index: _ }) => {
+                // Find target at cursor position
+                let cursor_pos = tactical_state.cursor_pos;
+                let target_idx = tactical_state.participants.iter().enumerate().find(|(idx, _)| {
+                    tactical_state.battlefield.participant_positions.get(idx)
+                        .map(|pos| pos.x == cursor_pos.0 && pos.y == cursor_pos.1)
+                        .unwrap_or(false)
+                }).map(|(idx, _)| idx);
+
+                if let Some(target_idx) = target_idx {
+                    let current_idx = tactical_state.initiative_order[tactical_state.current_turn_index].0;
+
+                    // Extract all data we need before any mutable borrows
+                    let attacker_name;
+                    let defender_name;
+                    let attack_value;
+                    let defensive_value;
+                    let has_weapon;
+                    let damage_bonus;
+
+                    {
+                        let attacker = &tactical_state.participants[current_idx];
+                        let defender = &tactical_state.participants[target_idx];
+
+                        attacker_name = attacker.base_participant.name.clone();
+                        defender_name = defender.base_participant.name.clone();
+                        attack_value = attacker.base_participant.combat_stats.attack_value;
+                        defensive_value = defender.base_participant.combat_stats.defensive_value;
+                        has_weapon = attacker.base_participant.weapon.is_some();
+                        damage_bonus = attacker.base_participant.combat_stats.damage_bonus;
+                    }
+
+                    // Roll attack
+                    let mut rng = rand::thread_rng();
+                    let attack_roll = rng.gen_range(1..=20);
+                    let total_attack = attack_roll + attack_value as i32;
+
+                    tactical_state.add_log(format!("{} attacks {}! (Roll: {}, Total: {})",
+                        attacker_name, defender_name, attack_roll, total_attack));
+
+                    if total_attack >= defensive_value as i32 {
+                        // Hit! Calculate damage
+                        // For now, use a simple d8 for weapons, d4 for unarmed
+                        let base_damage = if has_weapon {
+                            8 // d8 weapon damage
+                        } else {
+                            4 // d4 unarmed damage
+                        };
+
+                        let damage_roll = rng.gen_range(1..=base_damage);
+                        let total_damage = (damage_roll as i32 + damage_bonus as i32).max(1) as u32;
+
+                        // Apply damage
+                        let defender = &mut tactical_state.participants[target_idx];
+                        let old_hp = defender.base_participant.combat_stats.hit_points.current;
+                        defender.base_participant.combat_stats.hit_points.current =
+                            defender.base_participant.combat_stats.hit_points.current.saturating_sub(total_damage);
+                        let new_hp = defender.base_participant.combat_stats.hit_points.current;
+
+                        tactical_state.add_log(format!("HIT! {} damage dealt! ({} HP -> {} HP)",
+                            total_damage, old_hp, new_hp));
+
+                        if new_hp == 0 {
+                            tactical_state.add_log(format!("{} has been defeated!", defender_name));
+                        }
+                    } else {
+                        tactical_state.add_log(format!("MISS! (Needed {} to hit)", defensive_value));
+                    }
+
+                    // Clear pending action and advance turn
+                    tactical_state.pending_action = None;
+                    self.advance_turn(tactical_state);
+                } else {
+                    tactical_state.add_log("No valid target at cursor position!".to_string());
+                }
+            }
+
+            Some(crate::ui::PendingAction::Move { destination: _ }) => {
+                // Move to cursor position
+                let cursor_pos = tactical_state.cursor_pos;
+                let current_idx = tactical_state.initiative_order[tactical_state.current_turn_index].0;
+
+                // Check if position is valid (not occupied, within movement range, etc.)
+                let occupied = tactical_state.participants.iter().enumerate().any(|(idx, _)| {
+                    if idx == current_idx {
+                        return false;
+                    }
+                    tactical_state.battlefield.participant_positions.get(&idx)
+                        .map(|pos| pos.x == cursor_pos.0 && pos.y == cursor_pos.1)
+                        .unwrap_or(false)
+                });
+
+                if occupied {
+                    tactical_state.add_log("Position is occupied!".to_string());
+                } else {
+                    // Move participant
+                    let participant_name = tactical_state.participants[current_idx].base_participant.name.clone();
+                    let old_pos = tactical_state.battlefield.participant_positions.get(&current_idx).cloned();
+                    let new_pos = crate::forge::BattlefieldPosition::new(cursor_pos.0, cursor_pos.1);
+
+                    tactical_state.battlefield.participant_positions.insert(current_idx, new_pos);
+                    tactical_state.participants[current_idx].position = new_pos;
+
+                    if let Some(old_p) = old_pos {
+                        tactical_state.add_log(format!("{} moves from ({}, {}) to ({}, {})",
+                            participant_name, old_p.x, old_p.y, cursor_pos.0, cursor_pos.1));
+                    } else {
+                        tactical_state.add_log(format!("{} moves to ({}, {})",
+                            participant_name, cursor_pos.0, cursor_pos.1));
+                    }
+
+                    // Clear pending action and advance turn
+                    tactical_state.pending_action = None;
+                    self.advance_turn(tactical_state);
+                }
+            }
+
+            Some(crate::ui::PendingAction::Defend) => {
+                let current_idx = tactical_state.initiative_order[tactical_state.current_turn_index].0;
+                let participant_name = tactical_state.participants[current_idx].base_participant.name.clone();
+                tactical_state.add_log(format!("{} takes a defensive stance!", participant_name));
+
+                // Clear pending action and advance turn
+                tactical_state.pending_action = None;
+                self.advance_turn(tactical_state);
+            }
+
+            Some(crate::ui::PendingAction::CastSpell { .. }) => {
+                tactical_state.add_log("Spell casting not yet implemented!".to_string());
+                tactical_state.pending_action = None;
+            }
+
+            Some(crate::ui::PendingAction::UseItem { .. }) => {
+                tactical_state.add_log("Item usage not yet implemented!".to_string());
+                tactical_state.pending_action = None;
+            }
+
+            None => {}
+        }
+
+        Ok(())
+    }
+
+    fn advance_turn(&mut self, tactical_state: &mut crate::ui::TacticalCombatState) {
+        // Advance to next participant
+        tactical_state.current_turn_index = (tactical_state.current_turn_index + 1) % tactical_state.initiative_order.len();
+
+        // Check if we've completed a round
+        if tactical_state.current_turn_index == 0 {
+            tactical_state.round_number += 1;
+            tactical_state.add_log(format!("=== ROUND {} ===", tactical_state.round_number));
+        }
+
+        // Log whose turn it is
+        if let Some(participant) = tactical_state.get_current_participant() {
+            tactical_state.add_log(format!("{}'s turn!", participant.base_participant.name));
+        }
+    }
+
     fn get_compatible_items_static(character: &crate::forge::ForgeCharacter, slot: &crate::ui::EquipmentSlot) -> Vec<crate::forge::InventoryItem> {
         character.inventory.items.iter()
             .filter(|item| {
@@ -5153,3214 +5443,4 @@ impl Game {
             .collect()
     }
 
-    fn handle_tactical_combat_input(&mut self, key: KeyEvent, mut tactical_combat_state: crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        // Check if it's currently a player's turn - if not, only allow emergency exit
-        if let Some(current_participant) = tactical_combat_state.get_current_participant() {
-            if !current_participant.base_participant.is_player {
-                // During AI turns, only allow quitting
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => {
-                        tactical_combat_state.combat_log.push("Player attempted to exit during AI turn".to_string());
-                        // Allow graceful exit but don't process other inputs
-                        if let Some(return_state) = tactical_combat_state.return_to_dungeon.take() {
-                            if let UIState::DungeonExploration(ref mut dungeon_state) = self.state {
-                                *dungeon_state = *return_state;
-                                dungeon_state.active_tactical_combat = None;
-                            }
-                        }
-                        return Ok(());
-                    }
-                    _ => {
-                        // Ignore all other input during AI turns
-                        return Ok(());
-                    }
-                }
-            }
-        }
-        
-        match tactical_combat_state.combat_phase {
-            crate::ui::CombatPhase::TacticalMovement => {
-                match tactical_combat_state.active_panel {
-                    crate::ui::CombatPanel::Battlefield => {
-                        match key.code {
-                            // Cursor navigation (arrow keys, HJKL)
-                            KeyCode::Left | KeyCode::Char('h') => {
-                                tactical_combat_state.cursor_position.x -= 1;
-                                self.update_tactical_cursor_position(&mut tactical_combat_state);
-                                tactical_combat_state.update_movement_highlights();
-                            }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                tactical_combat_state.cursor_position.y += 1;
-                                self.update_tactical_cursor_position(&mut tactical_combat_state);
-                                tactical_combat_state.update_movement_highlights();
-                            }
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                tactical_combat_state.cursor_position.y -= 1;
-                                self.update_tactical_cursor_position(&mut tactical_combat_state);
-                                tactical_combat_state.update_movement_highlights();
-                            }
-                            KeyCode::Right | KeyCode::Char('l') => {
-                                tactical_combat_state.cursor_position.x += 1;
-                                self.update_tactical_cursor_position(&mut tactical_combat_state);
-                                tactical_combat_state.update_movement_highlights();
-                            }
-                            
-                            // WASD for actual player movement
-                            KeyCode::Char('w') | KeyCode::Char('W') => {
-                                self.move_player_on_battlefield(&mut tactical_combat_state, 0, -1)?;
-                            }
-                            KeyCode::Char('a') | KeyCode::Char('A') => {
-                                self.move_player_on_battlefield(&mut tactical_combat_state, -1, 0)?;
-                            }
-                            KeyCode::Char('s') | KeyCode::Char('S') => {
-                                self.move_player_on_battlefield(&mut tactical_combat_state, 0, 1)?;
-                            }
-                            KeyCode::Char('d') | KeyCode::Char('D') => {
-                                self.move_player_on_battlefield(&mut tactical_combat_state, 1, 0)?;
-                            }
-                            
-                            // HJKL to switch panels
-                            KeyCode::Char('H') => {
-                                // Already at leftmost panel
-                            }
-                            KeyCode::Char('L') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Movement;
-                            }
-                            
-                            // Confirm movement
-                            KeyCode::Enter | KeyCode::Char(' ') => {
-                                self.execute_tactical_movement(&mut tactical_combat_state)?;
-                            }
-                            
-                            // Tab cycles through panels
-                            KeyCode::Tab => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Movement;
-                            }
-                            
-                            _ => {}
-                        }
-                    }
-                    crate::ui::CombatPanel::Movement => {
-                        match key.code {
-                            // Panel navigation (arrow keys, JK, WS)
-                            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('s') => {
-                                tactical_combat_state.panel_selections.movement_index =
-                                    (tactical_combat_state.panel_selections.movement_index + 1) % 5;
-                            }
-                            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('w') => {
-                                if tactical_combat_state.panel_selections.movement_index == 0 {
-                                    tactical_combat_state.panel_selections.movement_index = 4;
-                                } else {
-                                    tactical_combat_state.panel_selections.movement_index -= 1;
-                                }
-                            }
-                            
-                            // HJKL to switch panels
-                            KeyCode::Char('H') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-                            }
-                            KeyCode::Char('L') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Combat;
-                            }
-                            
-                            // Number keys for quick selection
-                            KeyCode::Char('1') => self.execute_movement_action(&mut tactical_combat_state, 0)?,
-                            KeyCode::Char('2') => self.execute_movement_action(&mut tactical_combat_state, 1)?,
-                            KeyCode::Char('3') => self.execute_movement_action(&mut tactical_combat_state, 2)?,
-                            KeyCode::Char('4') => self.execute_movement_action(&mut tactical_combat_state, 3)?,
-                            KeyCode::Char('5') => self.execute_movement_action(&mut tactical_combat_state, 4)?,
-                            
-                            // Enter to select current
-                            KeyCode::Enter | KeyCode::Char(' ') => {
-                                let index = tactical_combat_state.panel_selections.movement_index;
-                                self.execute_movement_action(&mut tactical_combat_state, index)?;
-                            }
-                            
-                            // Tab cycles through panels
-                            KeyCode::Tab => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Combat;
-                            }
-                            
-                            _ => {}
-                        }
-                    }
-                    crate::ui::CombatPanel::Combat => {
-                        match key.code {
-                            // Panel navigation (arrow keys, JK - note: W is used as combat action hotkey)
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                tactical_combat_state.panel_selections.combat_index =
-                                    (tactical_combat_state.panel_selections.combat_index + 1) % 5;
-                            }
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                if tactical_combat_state.panel_selections.combat_index == 0 {
-                                    tactical_combat_state.panel_selections.combat_index = 4;
-                                } else {
-                                    tactical_combat_state.panel_selections.combat_index -= 1;
-                                }
-                            }
-                            
-                            // HJKL to switch panels
-                            KeyCode::Char('H') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Movement;
-                            }
-                            KeyCode::Char('L') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Skills;
-                            }
-                            
-                            // Letter keys for quick selection
-                            KeyCode::Char('a') | KeyCode::Char('A') => self.execute_combat_action(&mut tactical_combat_state, 0)?,
-                            KeyCode::Char('d') | KeyCode::Char('D') => self.execute_combat_action(&mut tactical_combat_state, 1)?,
-                            KeyCode::Char('g') | KeyCode::Char('G') => self.execute_combat_action(&mut tactical_combat_state, 2)?,
-                            KeyCode::Char('r') | KeyCode::Char('R') => self.execute_combat_action(&mut tactical_combat_state, 3)?,
-                            KeyCode::Char('w') | KeyCode::Char('W') => self.execute_combat_action(&mut tactical_combat_state, 4)?,
-                            
-                            // Enter to select current
-                            KeyCode::Enter | KeyCode::Char(' ') => {
-                                let index = tactical_combat_state.panel_selections.combat_index;
-                                self.execute_combat_action(&mut tactical_combat_state, index)?;
-                            }
-                            
-                            // Tab cycles through panels
-                            KeyCode::Tab => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Skills;
-                            }
-                            
-                            _ => {}
-                        }
-                    }
-                    crate::ui::CombatPanel::Skills => {
-                        match key.code {
-                            // hjkl navigation in panel
-                            KeyCode::Char('j') => {
-                                tactical_combat_state.panel_selections.skills_index = 
-                                    (tactical_combat_state.panel_selections.skills_index + 1) % 5;
-                            }
-                            KeyCode::Char('k') => {
-                                if tactical_combat_state.panel_selections.skills_index == 0 {
-                                    tactical_combat_state.panel_selections.skills_index = 4;
-                                } else {
-                                    tactical_combat_state.panel_selections.skills_index -= 1;
-                                }
-                            }
-                            
-                            // HJKL to switch panels
-                            KeyCode::Char('H') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Combat;
-                            }
-                            KeyCode::Char('L') => {
-                                // Already at rightmost panel
-                            }
-                            
-                            // Letter keys for quick selection
-                            KeyCode::Char('s') | KeyCode::Char('S') => self.execute_skills_action(&mut tactical_combat_state, 0)?,
-                            KeyCode::Char('p') | KeyCode::Char('P') => self.execute_skills_action(&mut tactical_combat_state, 1)?,
-                            KeyCode::Char('t') | KeyCode::Char('T') => self.execute_skills_action(&mut tactical_combat_state, 2)?,
-                            KeyCode::Char('i') | KeyCode::Char('I') => self.execute_skills_action(&mut tactical_combat_state, 3)?,
-                            KeyCode::Char('e') | KeyCode::Char('E') => self.execute_skills_action(&mut tactical_combat_state, 4)?,
-                            
-                            // Enter to select current
-                            KeyCode::Enter | KeyCode::Char(' ') => {
-                                let index = tactical_combat_state.panel_selections.skills_index;
-                                self.execute_skills_action(&mut tactical_combat_state, index)?;
-                            }
-                            
-                            // Tab cycles through panels
-                            KeyCode::Tab => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-                            }
-                            
-                            _ => {}
-                        }
-                    }
-                    crate::ui::CombatPanel::CharacterInfo => {
-                        match key.code {
-                            // HJKL to switch panels
-                            KeyCode::Char('H') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-                            }
-                            KeyCode::Char('J') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Movement;
-                            }
-                            KeyCode::Char('L') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::SkillsAvailable;
-                            }
-                            KeyCode::Tab => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::SkillsAvailable;
-                            }
-                            _ => {}
-                        }
-                    }
-                    crate::ui::CombatPanel::SkillsAvailable => {
-                        match key.code {
-                            // hjkl navigation in panel
-                            KeyCode::Char('j') => {
-                                tactical_combat_state.panel_selections.skills_available_index = 
-                                    (tactical_combat_state.panel_selections.skills_available_index + 1) % 10;
-                            }
-                            KeyCode::Char('k') => {
-                                if tactical_combat_state.panel_selections.skills_available_index == 0 {
-                                    tactical_combat_state.panel_selections.skills_available_index = 9;
-                                } else {
-                                    tactical_combat_state.panel_selections.skills_available_index -= 1;
-                                }
-                            }
-                            // HJKL to switch panels
-                            KeyCode::Char('H') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::CharacterInfo;
-                            }
-                            KeyCode::Char('L') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::TargetInfo;
-                            }
-                            KeyCode::Tab => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::TargetInfo;
-                            }
-                            _ => {}
-                        }
-                    }
-                    crate::ui::CombatPanel::TargetInfo => {
-                        match key.code {
-                            // HJKL to switch panels
-                            KeyCode::Char('H') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::SkillsAvailable;
-                            }
-                            KeyCode::Char('J') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::SpellDetails;
-                            }
-                            KeyCode::Tab => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Movement;
-                            }
-                            _ => {}
-                        }
-                    }
-                    crate::ui::CombatPanel::Inventory => {
-                        match key.code {
-                            // hjkl navigation in panel
-                            KeyCode::Char('j') => {
-                                tactical_combat_state.panel_selections.inventory_index = 
-                                    (tactical_combat_state.panel_selections.inventory_index + 1) % 4;
-                            }
-                            KeyCode::Char('k') => {
-                                if tactical_combat_state.panel_selections.inventory_index == 0 {
-                                    tactical_combat_state.panel_selections.inventory_index = 3;
-                                } else {
-                                    tactical_combat_state.panel_selections.inventory_index -= 1;
-                                }
-                            }
-                            // HJKL to switch panels
-                            KeyCode::Char('K') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::SpellDetails;
-                            }
-                            KeyCode::Tab => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::SpellDetails;
-                            }
-                            _ => {}
-                        }
-                    }
-                    crate::ui::CombatPanel::SpellDetails => {
-                        match key.code {
-                            // HJKL to switch panels
-                            KeyCode::Char('H') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Skills;
-                            }
-                            KeyCode::Char('K') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::TargetInfo;
-                            }
-                            KeyCode::Char('J') => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Inventory;
-                            }
-                            KeyCode::Tab => {
-                                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            
-            crate::ui::CombatPhase::TacticalActionSelection => {
-                if tactical_combat_state.spell_menu_open {
-                    self.handle_spell_selection(&mut tactical_combat_state, key)?;
-                } else {
-                    match key.code {
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if tactical_combat_state.selected_action_index > 0 {
-                                tactical_combat_state.selected_action_index -= 1;
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if tactical_combat_state.selected_action_index < tactical_combat_state.available_actions.len().saturating_sub(1) {
-                                tactical_combat_state.selected_action_index += 1;
-                            }
-                        }
-                        
-                        KeyCode::Enter | KeyCode::Char(' ') => {
-                            self.select_tactical_action(&mut tactical_combat_state)?;
-                        }
-                        
-                        KeyCode::Esc => {
-                            tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalMovement;
-                            tactical_combat_state.action_menu_open = false;
-                        }
-                        
-                        _ => {}
-                    }
-                }
-            }
-            
-            crate::ui::CombatPhase::TacticalTargeting => {
-                match key.code {
-                    // Move targeting cursor
-                    KeyCode::Char('w') | KeyCode::Up | KeyCode::Char('k') => {
-                        tactical_combat_state.cursor_position.y -= 1;
-                        self.update_tactical_cursor_position(&mut tactical_combat_state);
-                    }
-                    KeyCode::Char('s') | KeyCode::Down | KeyCode::Char('j') => {
-                        tactical_combat_state.cursor_position.y += 1;
-                        self.update_tactical_cursor_position(&mut tactical_combat_state);
-                    }
-                    KeyCode::Char('a') | KeyCode::Left | KeyCode::Char('h') => {
-                        tactical_combat_state.cursor_position.x -= 1;
-                        self.update_tactical_cursor_position(&mut tactical_combat_state);
-                    }
-                    KeyCode::Char('d') | KeyCode::Right | KeyCode::Char('l') => {
-                        tactical_combat_state.cursor_position.x += 1;
-                        self.update_tactical_cursor_position(&mut tactical_combat_state);
-                    }
-                    
-                    KeyCode::Enter | KeyCode::Char(' ') => {
-                        // Check if cursor is on a valid target
-                        if let Some(_spell) = &tactical_combat_state.targeting_spell {
-                            if tactical_combat_state.valid_spell_targets.contains(&tactical_combat_state.cursor_position) {
-                                // Update action with target position
-                                if let Some(ref mut action) = tactical_combat_state.selected_action {
-                                    match action {
-                                        crate::forge::TacticalCombatAction::CastSpell { ref mut target_position, ref mut target_id, .. } => {
-                                            *target_position = Some(tactical_combat_state.cursor_position);
-                                            // Find target ID at position if needed
-                                            for (id, pos) in &tactical_combat_state.battlefield.participant_positions {
-                                                if pos == &tactical_combat_state.cursor_position {
-                                                    *target_id = Some(*id);
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                self.execute_tactical_action(&mut tactical_combat_state)?;
-                            } else {
-                                tactical_combat_state.combat_log.push("Invalid target position!".to_string());
-                            }
-                        } else {
-                            self.execute_tactical_action(&mut tactical_combat_state)?;
-                        }
-                    }
-                    
-                    KeyCode::Esc => {
-                        tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                        tactical_combat_state.selected_action = None;
-                    }
-                    
-                    _ => {}
-                }
-            }
-            
-            crate::ui::CombatPhase::TacticalEnvironmentalInteraction => {
-                match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if let Some(index) = tactical_combat_state.selected_feature_index {
-                            if index > 0 {
-                                tactical_combat_state.selected_feature_index = Some(index - 1);
-                            }
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if let Some(index) = tactical_combat_state.selected_feature_index {
-                            if index < tactical_combat_state.available_environmental_features.len().saturating_sub(1) {
-                                tactical_combat_state.selected_feature_index = Some(index + 1);
-                            }
-                        } else if !tactical_combat_state.available_environmental_features.is_empty() {
-                            tactical_combat_state.selected_feature_index = Some(0);
-                        }
-                    }
-                    
-                    KeyCode::Enter | KeyCode::Char(' ') => {
-                        self.activate_environmental_feature(&mut tactical_combat_state)?;
-                    }
-                    
-                    KeyCode::Esc => {
-                        tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                        tactical_combat_state.selected_feature_index = None;
-                    }
-                    
-                    _ => {}
-                }
-            }
-            
-            crate::ui::CombatPhase::CombatComplete(player_won) => {
-                match key.code {
-                    KeyCode::Enter | KeyCode::Char(' ') => {
-                        if let Some(dungeon_state) = tactical_combat_state.return_to_dungeon.take().map(|boxed| *boxed) {
-                            if player_won {
-                                // Award experience and handle victory
-                                self.award_tactical_combat_experience(&tactical_combat_state)?;
-                            }
-                            self.state = UIState::DungeonExploration(dungeon_state);
-                        } else {
-                            self.state = UIState::Playing;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            
-            _ => {
-                // Handle other combat phases or fallback to movement
-                tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalMovement;
-            }
-        }
-        
-        self.state = UIState::TacticalCombat(tactical_combat_state);
-        Ok(())
-    }
-    
-    fn handle_integrated_tactical_combat_input(&mut self, key: KeyEvent, mut tactical_combat: crate::ui::TacticalCombatState, dungeon_state: &mut DungeonExplorationState) -> anyhow::Result<()> {
-        // Handle tactical combat input and update the integrated state
-        match tactical_combat.combat_phase {
-            crate::ui::CombatPhase::TacticalMovement => {
-                match key.code {
-                    // Movement with WASD only (hjkl reserved for UI navigation)
-                    KeyCode::Char('w') | KeyCode::Up => {
-                        tactical_combat.cursor_position.y -= 1;
-                        self.update_tactical_cursor_position(&mut tactical_combat);
-                        tactical_combat.update_movement_highlights();
-                    }
-                    KeyCode::Char('s') | KeyCode::Down => {
-                        tactical_combat.cursor_position.y += 1;
-                        self.update_tactical_cursor_position(&mut tactical_combat);
-                        tactical_combat.update_movement_highlights();
-                    }
-                    KeyCode::Char('a') | KeyCode::Left => {
-                        tactical_combat.cursor_position.x -= 1;
-                        self.update_tactical_cursor_position(&mut tactical_combat);
-                        tactical_combat.update_movement_highlights();
-                    }
-                    KeyCode::Char('d') | KeyCode::Right => {
-                        tactical_combat.cursor_position.x += 1;
-                        self.update_tactical_cursor_position(&mut tactical_combat);
-                        tactical_combat.update_movement_highlights();
-                    }
-                    
-                    // Panel navigation with hjkl (no conflicts)
-                    KeyCode::Char('h') => {
-                        tactical_combat.active_panel = match tactical_combat.active_panel {
-                            crate::ui::CombatPanel::TargetInfo => crate::ui::CombatPanel::SkillsAvailable,
-                            crate::ui::CombatPanel::SkillsAvailable => crate::ui::CombatPanel::CharacterInfo,
-                            _ => tactical_combat.active_panel,
-                        };
-                    }
-                    KeyCode::Char('j') => {
-                        tactical_combat.active_panel = match tactical_combat.active_panel {
-                            crate::ui::CombatPanel::CharacterInfo => crate::ui::CombatPanel::Movement,
-                            crate::ui::CombatPanel::SkillsAvailable => crate::ui::CombatPanel::Combat,
-                            crate::ui::CombatPanel::TargetInfo => crate::ui::CombatPanel::Skills,
-                            _ => tactical_combat.active_panel,
-                        };
-                    }
-                    KeyCode::Char('k') => {
-                        tactical_combat.active_panel = match tactical_combat.active_panel {
-                            crate::ui::CombatPanel::Movement => crate::ui::CombatPanel::CharacterInfo,
-                            crate::ui::CombatPanel::Combat => crate::ui::CombatPanel::SkillsAvailable,
-                            crate::ui::CombatPanel::Skills => crate::ui::CombatPanel::TargetInfo,
-                            _ => tactical_combat.active_panel,
-                        };
-                    }
-                    KeyCode::Char('l') => {
-                        tactical_combat.active_panel = match tactical_combat.active_panel {
-                            crate::ui::CombatPanel::CharacterInfo => crate::ui::CombatPanel::SkillsAvailable,
-                            crate::ui::CombatPanel::SkillsAvailable => crate::ui::CombatPanel::TargetInfo,
-                            _ => tactical_combat.active_panel,
-                        };
-                    }
-                    
-                    // Direct action keys for smooth combat flow
-                    KeyCode::Char('1') => {
-                        // Direct Attack - immediately enter targeting mode
-                        tactical_combat.combat_phase = crate::ui::CombatPhase::TacticalTargeting;
-                        let attack_action = crate::forge::TacticalCombatAction::Attack { target_id: 0 };
-                        tactical_combat.selected_action = Some(attack_action.clone());
-                        tactical_combat.update_targeting_highlights(&attack_action);
-                    }
-                    KeyCode::Char('2') => {
-                        // Direct Spell Cast - open spell menu
-                        if self.has_available_spells(&tactical_combat) {
-                            tactical_combat.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                            tactical_combat.spell_menu_open = true;
-                            let spell_action = crate::forge::TacticalCombatAction::CastSpell {
-                                spell_name: String::new(),
-                                target_position: None,
-                                target_id: None,
-                            };
-                            tactical_combat.selected_action = Some(spell_action);
-                        }
-                    }
-                    KeyCode::Char('3') => {
-                        // Direct Defend action
-                        tactical_combat.selected_action = Some(crate::forge::TacticalCombatAction::Defend);
-                        self.execute_defend_action(&mut tactical_combat)?;
-                    }
-                    KeyCode::Char('4') => {
-                        // Direct Use Item
-                        tactical_combat.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                        tactical_combat.inventory_menu_open = true;
-                        let item_action = crate::forge::TacticalCombatAction::UseItem {
-                            item_name: String::new(),
-                            target_id: None,
-                        };
-                        tactical_combat.selected_action = Some(item_action);
-                    }
-                    
-                    KeyCode::Enter | KeyCode::Char(' ') => {
-                        // Execute movement to cursor position
-                        self.execute_tactical_movement(&mut tactical_combat)?;
-                    }
-                    
-                    // End turn immediately
-                    KeyCode::Char('e') | KeyCode::Char('E') => {
-                        self.execute_end_turn(&mut tactical_combat)?;
-                    }
-                    
-                    // Advanced menu for complex actions (kept for completeness)
-                    KeyCode::Tab => {
-                        tactical_combat.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                        self.populate_available_actions(&mut tactical_combat);
-                    }
-                    
-                    KeyCode::Char('f') | KeyCode::Char('F') => {
-                        // Activate Forge combat system
-                        tactical_combat.start_forge_combat();
-                    }
-                    _ => {}
-                }
-            }
-            crate::ui::CombatPhase::TacticalActionSelection => {
-                // Check if we're in Forge spell selection mode
-                if tactical_combat.spell_menu_open {
-                    match key.code {
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if tactical_combat.selected_spell_index > 0 {
-                                tactical_combat.selected_spell_index -= 1;
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if tactical_combat.selected_spell_index < tactical_combat.available_spells.len().saturating_sub(1) {
-                                tactical_combat.selected_spell_index += 1;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            // Select the spell and declare it as a Forge action
-                            if let Some((spell_name, spell)) = tactical_combat.available_spells.get(tactical_combat.selected_spell_index) {
-                                let current_participant = tactical_combat.current_participant_index;
-                                
-                                // Determine target based on spell type
-                                let target_type = match &spell.target {
-                                    crate::forge::magic::SpellTarget::SingleEnemy => {
-                                        if let Some(target_id) = self.find_any_enemy(&tactical_combat) {
-                                            crate::ui::ForgeSpellTarget::Participant(target_id)
-                                        } else {
-                                            crate::ui::ForgeSpellTarget::Self_
-                                        }
-                                    }
-                                    crate::forge::magic::SpellTarget::SingleAlly | crate::forge::magic::SpellTarget::Self_ => {
-                                        crate::ui::ForgeSpellTarget::Self_
-                                    }
-                                    crate::forge::magic::SpellTarget::AllEnemies => {
-                                        crate::ui::ForgeSpellTarget::AllEnemies
-                                    }
-                                    crate::forge::magic::SpellTarget::AllAllies => {
-                                        crate::ui::ForgeSpellTarget::AllAllies
-                                    }
-                                    _ => crate::ui::ForgeSpellTarget::Self_
-                                };
-                                
-                                let action = crate::ui::ForgeAction::CastSpell { 
-                                    spell: spell.clone(), 
-                                    target_type 
-                                };
-                                
-                                tactical_combat.actions_declared.push((current_participant, action));
-                                tactical_combat.combat_log.push(format!(
-                                    "{} declares Cast Spell: {}",
-                                    tactical_combat.participants[current_participant].base_participant.name,
-                                    spell_name
-                                ));
-                                
-                                // Close spell menu and return to action declaration
-                                tactical_combat.spell_menu_open = false;
-                                tactical_combat.combat_phase = crate::ui::CombatPhase::ForgeActionDeclaration;
-                                self.advance_forge_participant(&mut tactical_combat);
-                            }
-                        }
-                        KeyCode::Esc => {
-                            // Cancel spell selection, return to action declaration
-                            tactical_combat.spell_menu_open = false;
-                            tactical_combat.combat_phase = crate::ui::CombatPhase::ForgeActionDeclaration;
-                        }
-                        _ => {}
-                    }
-                } else {
-                    // Regular tactical action selection
-                    match key.code {
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if tactical_combat.selected_action_index > 0 {
-                                tactical_combat.selected_action_index -= 1;
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if tactical_combat.selected_action_index < tactical_combat.available_actions.len().saturating_sub(1) {
-                                tactical_combat.selected_action_index += 1;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            self.select_tactical_action(&mut tactical_combat)?;
-                        }
-                        KeyCode::Esc => {
-                            tactical_combat.combat_phase = crate::ui::CombatPhase::TacticalMovement;
-                            tactical_combat.action_menu_open = false;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            crate::ui::CombatPhase::CombatComplete(player_won) => {
-                match key.code {
-                    KeyCode::Enter => {
-                        // Exit combat and return to normal dungeon exploration
-                        if player_won {
-                            tactical_combat.combat_log.push("Victory! You have defeated your enemies.".to_string());
-                            if let Some(_character) = &mut self.current_character {
-                                self.award_tactical_combat_experience(&tactical_combat)?;
-                            }
-                        } else {
-                            tactical_combat.combat_log.push("Defeat! You have been overcome.".to_string());
-                        }
-                        
-                        // Clear tactical combat from dungeon state
-                        dungeon_state.active_tactical_combat = None;
-                        self.state = UIState::DungeonExploration(dungeon_state.clone());
-                        return Ok(());
-                    }
-                    _ => {}
-                }
-            }
-            // Forge Combat Minute phases
-            crate::ui::CombatPhase::ForgeInitiativeRoll => {
-                match key.code {
-                    KeyCode::Enter | KeyCode::Char(' ') => {
-                        // Initiative already rolled, advance to action declaration
-                        tactical_combat.combat_phase = crate::ui::CombatPhase::ForgeActionDeclaration;
-                        if let Some(participant) = tactical_combat.participants.get(tactical_combat.current_participant_index) {
-                            tactical_combat.combat_log.push(format!(
-                                "{} may declare their action for Combat Minute {}",
-                                participant.base_participant.name,
-                                tactical_combat.combat_minute
-                            ));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            crate::ui::CombatPhase::ForgeActionDeclaration => {
-                match key.code {
-                    KeyCode::Char('1') => {
-                        // Melee Attack - find closest enemy as target
-                        if let Some(target_id) = self.find_closest_enemy(&tactical_combat) {
-                            let current_participant = tactical_combat.current_participant_index;
-                            let weapon = tactical_combat.participants[current_participant].base_participant.weapon.clone();
-                            let action = crate::ui::ForgeAction::MeleeAttack { target_id, weapon };
-                            
-                            tactical_combat.actions_declared.push((current_participant, action));
-                            tactical_combat.combat_log.push(format!(
-                                "{} declares Melee Attack against {}",
-                                tactical_combat.participants[current_participant].base_participant.name,
-                                tactical_combat.participants[target_id].base_participant.name
-                            ));
-                        } else {
-                            tactical_combat.combat_log.push("No valid melee targets available!".to_string());
-                        }
-                        self.advance_forge_participant(&mut tactical_combat);
-                    }
-                    KeyCode::Char('2') => {
-                        // Missile Attack - find any enemy as target
-                        if let Some(target_id) = self.find_any_enemy(&tactical_combat) {
-                            let current_participant = tactical_combat.current_participant_index;
-                            let weapon = tactical_combat.participants[current_participant].base_participant.weapon.clone();
-                            let position = tactical_combat.participants[target_id].position;
-                            let action = crate::ui::ForgeAction::MissileAttack { target_id, weapon, position };
-                            
-                            tactical_combat.actions_declared.push((current_participant, action));
-                            tactical_combat.combat_log.push(format!(
-                                "{} declares Missile Attack against {}",
-                                tactical_combat.participants[current_participant].base_participant.name,
-                                tactical_combat.participants[target_id].base_participant.name
-                            ));
-                        } else {
-                            tactical_combat.combat_log.push("No valid missile targets available!".to_string());
-                        }
-                        self.advance_forge_participant(&mut tactical_combat);
-                    }
-                    KeyCode::Char('3') => {
-                        // Cast Spell - enter spell selection mode
-                        let current_participant = tactical_combat.current_participant_index;
-                        if tactical_combat.participants[current_participant].base_participant.is_player {
-                            if self.current_character.is_some() {
-                                // Enter Forge spell selection mode
-                                tactical_combat.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                                self.populate_forge_spell_menu(&mut tactical_combat);
-                            } else {
-                                tactical_combat.combat_log.push("No character data available for spell casting!".to_string());
-                                self.advance_forge_participant(&mut tactical_combat);
-                            }
-                        } else {
-                            // AI spell casting - choose a random spell
-                            let all_spells = crate::forge::magic::create_starter_spells();
-                            if let Some((spell_name, spell)) = all_spells.iter().next() {
-                                let target_type = if let Some(target_id) = self.find_any_enemy(&tactical_combat) {
-                                    crate::ui::ForgeSpellTarget::Participant(target_id)
-                                } else {
-                                    crate::ui::ForgeSpellTarget::Self_
-                                };
-                                
-                                let action = crate::ui::ForgeAction::CastSpell { 
-                                    spell: spell.clone(), 
-                                    target_type 
-                                };
-                                
-                                tactical_combat.actions_declared.push((current_participant, action));
-                                tactical_combat.combat_log.push(format!(
-                                    "{} declares Cast Spell: {}",
-                                    tactical_combat.participants[current_participant].base_participant.name,
-                                    spell_name
-                                ));
-                            }
-                            self.advance_forge_participant(&mut tactical_combat);
-                        }
-                    }
-                    KeyCode::Char('4') => {
-                        // Defend - designate closest enemy as prime opponent
-                        let current_participant = tactical_combat.current_participant_index;
-                        let prime_opponent = self.find_closest_enemy(&tactical_combat).unwrap_or(0);
-                        let action = crate::ui::ForgeAction::Defend { prime_opponent };
-                        
-                        tactical_combat.actions_declared.push((current_participant, action));
-                        tactical_combat.combat_log.push(format!(
-                            "{} declares Defend against {}",
-                            tactical_combat.participants[current_participant].base_participant.name,
-                            tactical_combat.participants.get(prime_opponent)
-                                .map(|p| p.base_participant.name.clone())
-                                .unwrap_or("unknown".to_string())
-                        ));
-                        self.advance_forge_participant(&mut tactical_combat);
-                    }
-                    KeyCode::Char('5') => {
-                        // Use Item - default to health potion
-                        let current_participant = tactical_combat.current_participant_index;
-                        let action = crate::ui::ForgeAction::UseItem { 
-                            item_name: "Health Potion".to_string(),
-                            target_id: None
-                        };
-                        
-                        tactical_combat.actions_declared.push((current_participant, action));
-                        tactical_combat.combat_log.push(format!(
-                            "{} declares Use Item: Health Potion",
-                            tactical_combat.participants[current_participant].base_participant.name
-                        ));
-                        self.advance_forge_participant(&mut tactical_combat);
-                    }
-                    KeyCode::Char('6') => {
-                        // Wait
-                        let current_participant = tactical_combat.current_participant_index;
-                        let action = crate::ui::ForgeAction::Wait;
-                        
-                        tactical_combat.actions_declared.push((current_participant, action));
-                        tactical_combat.combat_log.push(format!(
-                            "{} declares Wait",
-                            tactical_combat.participants[current_participant].base_participant.name
-                        ));
-                        self.advance_forge_participant(&mut tactical_combat);
-                    }
-                    KeyCode::Tab => {
-                        // Skip this participant (AI will decide later)
-                        let current_participant = tactical_combat.current_participant_index;
-                        let action = crate::ui::ForgeAction::Wait; // Default action
-                        
-                        tactical_combat.actions_declared.push((current_participant, action));
-                        tactical_combat.combat_log.push(format!(
-                            "{} skips action declaration (Wait)",
-                            tactical_combat.participants[current_participant].base_participant.name
-                        ));
-                        self.advance_forge_participant(&mut tactical_combat);
-                    }
-                    KeyCode::Esc => {
-                        // Exit Forge combat mode
-                        tactical_combat.combat_phase = crate::ui::CombatPhase::TacticalMovement;
-                        tactical_combat.combat_log.push("Exited Forge combat mode".to_string());
-                    }
-                    _ => {}
-                }
-            }
-            crate::ui::CombatPhase::ForgeActionResolution => {
-                match key.code {
-                    KeyCode::Enter | KeyCode::Char(' ') => {
-                        // Process next action in initiative order
-                        self.resolve_next_forge_action(&mut tactical_combat);
-                    }
-                    _ => {}
-                }
-            }
-            crate::ui::CombatPhase::ForgeCombatMinuteEnd => {
-                match key.code {
-                    KeyCode::Enter | KeyCode::Char(' ') => {
-                        // Start next combat minute
-                        tactical_combat.advance_combat_minute();
-                    }
-                    _ => {}
-                }
-            }
-            _ => {
-                // Handle other combat phases the same way as regular tactical combat
-                // For now, fall back to movement phase
-                tactical_combat.combat_phase = crate::ui::CombatPhase::TacticalMovement;
-            }
-        }
-        
-        // Update the dungeon state with modified tactical combat
-        dungeon_state.active_tactical_combat = Some(Box::new(tactical_combat));
-        self.state = UIState::DungeonExploration(dungeon_state.clone());
-        Ok(())
-    }
-    
-    // Forge combat helper functions
-    fn advance_forge_participant(&mut self, tactical_combat: &mut crate::ui::TacticalCombatState) {
-        // Check if all participants have declared actions
-        let all_declared = tactical_combat.actions_declared.len() >= tactical_combat.participants.len();
-        
-        if all_declared {
-            // All actions declared, move to resolution
-            tactical_combat.combat_phase = crate::ui::CombatPhase::ForgeActionResolution;
-            tactical_combat.combat_log.push("=== All actions declared. Beginning resolution ===".to_string());
-            tactical_combat.current_action_resolver = 0;
-        } else {
-            // Advance to next participant for action declaration
-            if tactical_combat.advance_to_next_participant() {
-                if let Some(participant) = tactical_combat.participants.get(tactical_combat.current_participant_index) {
-                    tactical_combat.combat_log.push(format!(
-                        "{} may declare their action",
-                        participant.base_participant.name
-                    ));
-                    
-                    // If it's an AI participant, automatically choose an action
-                    if !participant.base_participant.is_player {
-                        self.ai_declare_forge_action(tactical_combat);
-                        // Recursively check if we need to advance again
-                        self.advance_forge_participant(tactical_combat);
-                    }
-                }
-            }
-        }
-    }
-    
-    // Enhanced AI action declaration for Forge combat
-    fn ai_declare_forge_action(&mut self, tactical_combat: &mut crate::ui::TacticalCombatState) {
-        let mut rng = rand::thread_rng();
-        
-        let current_participant = tactical_combat.current_participant_index;
-        let ai_participant = &tactical_combat.participants[current_participant];
-        let ai_personality = ai_participant.base_participant.ai_personality.clone();
-        let health_pct = ai_participant.base_participant.get_health_percentage();
-        
-        let action = if let Some(personality) = &ai_personality {
-            self.make_personality_based_forge_decision(tactical_combat, current_participant, personality, health_pct, &mut rng)
-        } else {
-            self.make_basic_forge_decision(tactical_combat, current_participant, &mut rng)
-        };
-        
-        // Declare the action
-        tactical_combat.actions_declared.push((current_participant, action.clone()));
-        
-        let action_name = match action {
-            crate::ui::ForgeAction::MeleeAttack { .. } => "Melee Attack",
-            crate::ui::ForgeAction::MissileAttack { .. } => "Missile Attack", 
-            crate::ui::ForgeAction::CastSpell { .. } => "Cast Spell",
-            crate::ui::ForgeAction::Defend { .. } => "Defend",
-            crate::ui::ForgeAction::Retreat { .. } => "Retreat",
-            crate::ui::ForgeAction::Wait => "Wait",
-            crate::ui::ForgeAction::UseItem { .. } => "Use Item",
-            crate::ui::ForgeAction::SwitchWeapon { .. } => "Switch Weapon",
-            crate::ui::ForgeAction::EndTurn => "End Turn",
-            crate::ui::ForgeAction::MoveOnly => "Move Only",
-        };
-        
-        tactical_combat.combat_log.push(format!(
-            "{} (AI) declares {} [{}%]",
-            tactical_combat.participants[current_participant].base_participant.name,
-            action_name,
-            health_pct
-        ));
-    }
-    
-    fn make_personality_based_forge_decision(&self, tactical_combat: &crate::ui::TacticalCombatState, 
-                                           ai_index: usize, personality: &crate::forge::AIPersonality, 
-                                           health_pct: u8, rng: &mut impl rand::Rng) -> crate::ui::ForgeAction {
-        let ai_participant = &tactical_combat.participants[ai_index];
-        let is_desperate = health_pct <= personality.health_threshold;
-        
-        // Find targets
-        let closest_target = self.find_closest_enemy(tactical_combat);
-        let best_target = self.find_forge_best_target(tactical_combat, ai_index, personality);
-        
-        match personality.behavior_type {
-            crate::forge::AIBehaviorType::Berserker => {
-                // Berserkers always attack, never defend, and get more aggressive when hurt
-                if let Some(target_id) = closest_target {
-                    self.choose_attack_type(tactical_combat, ai_index, target_id, true) // Always aggressive
-                } else {
-                    crate::ui::ForgeAction::Wait
-                }
-            }
-            crate::forge::AIBehaviorType::Aggressive => {
-                let attack_chance = if is_desperate { 90 } else { 75 };
-                if rng.gen_range(1..=100) <= attack_chance {
-                    if let Some(target_id) = best_target.or(closest_target) {
-                        self.choose_attack_type(tactical_combat, ai_index, target_id, false)
-                    } else {
-                        crate::ui::ForgeAction::Wait
-                    }
-                } else {
-                    // Occasionally defend
-                    let prime_opponent = closest_target.unwrap_or(0);
-                    crate::ui::ForgeAction::Defend { prime_opponent }
-                }
-            }
-            crate::forge::AIBehaviorType::Defensive => {
-                let defend_chance = if is_desperate { 80 } else { 60 };
-                if rng.gen_range(1..=100) <= defend_chance {
-                    let prime_opponent = closest_target.unwrap_or(0);
-                    crate::ui::ForgeAction::Defend { prime_opponent }
-                } else if health_pct < 50 && rng.gen_bool(0.3) {
-                    // Low health, consider using healing item
-                    crate::ui::ForgeAction::UseItem { 
-                        item_name: "Health Potion".to_string(), 
-                        target_id: None 
-                    }
-                } else {
-                    // Cautious attack
-                    if let Some(target_id) = self.find_weakest_forge_target(tactical_combat, ai_index) {
-                        self.choose_attack_type(tactical_combat, ai_index, target_id, false)
-                    } else {
-                        crate::ui::ForgeAction::Wait
-                    }
-                }
-            }
-            crate::forge::AIBehaviorType::Coward => {
-                if is_desperate {
-                    // Try to retreat
-                    crate::ui::ForgeAction::Retreat { 
-                        direction: self.find_best_retreat_direction(tactical_combat, ai_index) 
-                    }
-                } else if health_pct < 50 {
-                    // Use healing items when possible
-                    if rng.gen_bool(0.6) {
-                        crate::ui::ForgeAction::UseItem { 
-                            item_name: "Health Potion".to_string(), 
-                            target_id: None 
-                        }
-                    } else {
-                        let prime_opponent = closest_target.unwrap_or(0);
-                        crate::ui::ForgeAction::Defend { prime_opponent }
-                    }
-                } else {
-                    // Only attack when feeling safe (high health)
-                    if rng.gen_range(1..=10) <= 3 {
-                        if let Some(target_id) = self.find_weakest_forge_target(tactical_combat, ai_index) {
-                            self.choose_attack_type(tactical_combat, ai_index, target_id, false)
-                        } else {
-                            crate::ui::ForgeAction::Wait
-                        }
-                    } else {
-                        let prime_opponent = closest_target.unwrap_or(0);
-                        crate::ui::ForgeAction::Defend { prime_opponent }
-                    }
-                }
-            }
-            crate::forge::AIBehaviorType::Tactical => {
-                // Tactical AI considers multiple factors
-                if is_desperate && health_pct < 30 {
-                    // Emergency healing
-                    crate::ui::ForgeAction::UseItem { 
-                        item_name: "Health Potion".to_string(), 
-                        target_id: None 
-                    }
-                } else {
-                    let action_score = rng.gen_range(1..=10);
-                    if action_score <= personality.aggression {
-                        // Smart targeting
-                        if let Some(target_id) = best_target {
-                            self.choose_tactical_attack(tactical_combat, ai_index, target_id, personality)
-                        } else {
-                            crate::ui::ForgeAction::Wait
-                        }
-                    } else {
-                        // Tactical defense
-                        let prime_opponent = best_target.or(closest_target).unwrap_or(0);
-                        crate::ui::ForgeAction::Defend { prime_opponent }
-                    }
-                }
-            }
-            crate::forge::AIBehaviorType::Spellcaster => {
-                // Prefer magical attacks when available
-                if personality.spell_preference >= 7 && rng.gen_bool(0.7) {
-                    // Try to cast a spell (simplified for now)
-                    if let Some(target_id) = best_target.or(closest_target) {
-                        let spell = self.create_ai_spell(personality);
-                        let target_type = crate::ui::ForgeSpellTarget::Participant(target_id);
-                        crate::ui::ForgeAction::CastSpell { 
-                            spell,
-                            target_type
-                        }
-                    } else {
-                        crate::ui::ForgeAction::Wait
-                    }
-                } else {
-                    // Fallback to ranged attacks
-                    if let Some(target_id) = best_target.or(closest_target) {
-                        let target_pos = tactical_combat.participants[target_id].position;
-                        let weapon = ai_participant.base_participant.weapon.clone();
-                        crate::ui::ForgeAction::MissileAttack { target_id, weapon, position: target_pos }
-                    } else {
-                        crate::ui::ForgeAction::Wait
-                    }
-                }
-            }
-            _ => {
-                // Balanced default behavior
-                self.make_balanced_forge_decision(tactical_combat, ai_index, personality, health_pct, rng)
-            }
-        }
-    }
-    
-    fn make_basic_forge_decision(&self, tactical_combat: &crate::ui::TacticalCombatState, 
-                               ai_index: usize, rng: &mut impl rand::Rng) -> crate::ui::ForgeAction {
-        // Fallback to simple AI behavior
-        let action_choice = rng.gen_range(1..=100);
-        
-        if action_choice <= 60 {
-            if let Some(target_id) = self.find_closest_enemy(tactical_combat) {
-                self.choose_attack_type(tactical_combat, ai_index, target_id, false)
-            } else {
-                crate::ui::ForgeAction::Wait
-            }
-        } else if action_choice <= 80 {
-            let prime_opponent = self.find_closest_enemy(tactical_combat).unwrap_or(0);
-            crate::ui::ForgeAction::Defend { prime_opponent }
-        } else {
-            crate::ui::ForgeAction::Wait
-        }
-    }
-    
-    fn make_balanced_forge_decision(&self, tactical_combat: &crate::ui::TacticalCombatState, 
-                                  ai_index: usize, personality: &crate::forge::AIPersonality, 
-                                  health_pct: u8, rng: &mut impl rand::Rng) -> crate::ui::ForgeAction {
-        let is_desperate = health_pct <= personality.health_threshold;
-        
-        if is_desperate && health_pct < 25 {
-            // Emergency actions when very low health
-            if rng.gen_bool(0.4) {
-                crate::ui::ForgeAction::UseItem { 
-                    item_name: "Health Potion".to_string(), 
-                    target_id: None 
-                }
-            } else {
-                crate::ui::ForgeAction::Retreat { 
-                    direction: self.find_best_retreat_direction(tactical_combat, ai_index) 
-                }
-            }
-        } else {
-            let action_choice = rng.gen_range(1..=10);
-            if action_choice <= personality.aggression {
-                // Attack
-                if let Some(target_id) = self.find_forge_best_target(tactical_combat, ai_index, personality) {
-                    self.choose_attack_type(tactical_combat, ai_index, target_id, false)
-                } else {
-                    crate::ui::ForgeAction::Wait
-                }
-            } else {
-                // Defend
-                let prime_opponent = self.find_closest_enemy(tactical_combat).unwrap_or(0);
-                crate::ui::ForgeAction::Defend { prime_opponent }
-            }
-        }
-    }
-    
-    fn resolve_next_forge_action(&mut self, tactical_combat: &mut crate::ui::TacticalCombatState) {
-        if tactical_combat.current_action_resolver < tactical_combat.actions_declared.len() {
-            let (participant_index, action) = tactical_combat.actions_declared[tactical_combat.current_action_resolver].clone();
-            
-            // Execute the declared action based on its type
-            self.execute_forge_action(tactical_combat, participant_index, action);
-            
-            tactical_combat.current_action_resolver += 1;
-        } else {
-            // All actions resolved, end combat minute
-            tactical_combat.combat_phase = crate::ui::CombatPhase::ForgeCombatMinuteEnd;
-            tactical_combat.combat_log.push("=== Combat Minute Complete ===".to_string());
-        }
-    }
-    
-    // Execute a declared Forge action with proper AV/DV calculations
-    fn execute_forge_action(&mut self, tactical_combat: &mut crate::ui::TacticalCombatState, participant_index: usize, action: crate::ui::ForgeAction) {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        
-        if let Some(participant) = tactical_combat.participants.get(participant_index).cloned() {
-            let participant_name = participant.base_participant.name.clone();
-            
-            match action {
-                crate::ui::ForgeAction::MeleeAttack { target_id, weapon } => {
-                    if let Some(target) = tactical_combat.participants.get(target_id) {
-                        let target_name = target.base_participant.name.clone();
-                        
-                        tactical_combat.combat_log.push(format!(
-                            "{} attacks {} with melee weapon!",
-                            participant_name, target_name
-                        ));
-                        
-                        // Calculate Forge AV/DV values
-                        let attacker_av = self.calculate_forge_av(&participant, &weapon);
-                        let defender_dv = self.calculate_forge_dv(&tactical_combat.participants[target_id], Some(participant_index));
-                        
-                        // Roll 1d20 + AV vs DV
-                        let attack_roll = rng.gen_range(1..=20);
-                        let total_attack = attack_roll + attacker_av;
-                        
-                        tactical_combat.combat_log.push(format!(
-                            "Attack: {} + {} = {} vs DV {}",
-                            attack_roll, attacker_av, total_attack, defender_dv
-                        ));
-                        
-                        if total_attack > defender_dv {
-                            // Hit! Roll damage and apply Forge damage rules
-                            let damage_result = self.calculate_forge_damage(&weapon, attack_roll == 20);
-                            let (actual_damage, armor_absorbed) = tactical_combat.participants[target_id]
-                                .base_participant.take_damage(damage_result.total_damage, damage_result.dice_count);
-                            
-                            if damage_result.critical {
-                                tactical_combat.combat_log.push(format!(
-                                    "CRITICAL HIT! {} damage ({} to HP, {} absorbed by armor)",
-                                    damage_result.total_damage, actual_damage, armor_absorbed
-                                ));
-                            } else {
-                                tactical_combat.combat_log.push(format!(
-                                    "Hit for {} damage ({} to HP, {} absorbed by armor)",
-                                    damage_result.total_damage, actual_damage, armor_absorbed
-                                ));
-                            }
-                            
-                            // Check if target is defeated
-                            if !tactical_combat.participants[target_id].base_participant.is_alive() {
-                                tactical_combat.combat_log.push(format!("{} has been defeated!", target_name));
-                            }
-                        } else {
-                            tactical_combat.combat_log.push("Attack missed!".to_string());
-                        }
-                    }
-                }
-                crate::ui::ForgeAction::MissileAttack { target_id, weapon, position: _ } => {
-                    if let Some(target) = tactical_combat.participants.get(target_id) {
-                        let target_name = target.base_participant.name.clone();
-                        
-                        tactical_combat.combat_log.push(format!(
-                            "{} shoots {} with ranged weapon!",
-                            participant_name, target_name
-                        ));
-                        
-                        // Similar to melee but with ranged weapon calculations
-                        let attacker_av = self.calculate_forge_av(&participant, &weapon);
-                        let defender_dv = self.calculate_forge_dv(&tactical_combat.participants[target_id], Some(participant_index));
-                        
-                        let attack_roll = rng.gen_range(1..=20);
-                        let total_attack = attack_roll + attacker_av;
-                        
-                        if total_attack > defender_dv {
-                            let damage_result = self.calculate_forge_damage(&weapon, attack_roll == 20);
-                            let (actual_damage, armor_absorbed) = tactical_combat.participants[target_id]
-                                .base_participant.take_damage(damage_result.total_damage, damage_result.dice_count);
-                            
-                            tactical_combat.combat_log.push(format!(
-                                "Ranged hit for {} damage ({} to HP, {} absorbed)",
-                                damage_result.total_damage, actual_damage, armor_absorbed
-                            ));
-                        } else {
-                            tactical_combat.combat_log.push("Ranged attack missed!".to_string());
-                        }
-                    }
-                }
-                crate::ui::ForgeAction::CastSpell { spell, target_type } => {
-                    tactical_combat.combat_log.push(format!(
-                        "{} casts {}!",
-                        participant_name, spell.name
-                    ));
-                    
-                    // Check if caster has enough spell points
-                    if let Some(character) = &mut self.current_character {
-                        if character.magic.can_cast_spell(&spell) {
-                            character.magic.spend_spell_points(spell.cost);
-                            
-                            // Execute spell effect based on target type
-                            self.execute_forge_spell_effect(tactical_combat, participant_index, &spell, &target_type);
-                        } else {
-                            tactical_combat.combat_log.push("Not enough spell points!".to_string());
-                        }
-                    }
-                }
-                crate::ui::ForgeAction::Defend { prime_opponent } => {
-                    tactical_combat.combat_log.push(format!(
-                        "{} takes a defensive stance against {}",
-                        participant_name,
-                        tactical_combat.participants.get(prime_opponent)
-                            .map(|p| p.base_participant.name.clone())
-                            .unwrap_or("unknown".to_string())
-                    ));
-                    
-                    // Set prime opponent for defensive calculations
-                    tactical_combat.set_prime_opponent(participant_index, prime_opponent);
-                    
-                    // TODO: Apply defensive bonuses for this combat minute
-                }
-                crate::ui::ForgeAction::Retreat { direction: _ } => {
-                    tactical_combat.combat_log.push(format!(
-                        "{} attempts to retreat from combat!",
-                        participant_name
-                    ));
-                    
-                    // Roll retreat attempt (simplified)
-                    let retreat_roll = rng.gen_range(1..=20);
-                    if retreat_roll >= 10 {
-                        tactical_combat.combat_log.push("Retreat successful!".to_string());
-                        // TODO: Remove participant from combat or move them away
-                    } else {
-                        tactical_combat.combat_log.push("Failed to retreat!".to_string());
-                    }
-                }
-                crate::ui::ForgeAction::Wait => {
-                    tactical_combat.combat_log.push(format!(
-                        "{} waits and observes the battlefield",
-                        participant_name
-                    ));
-                }
-                crate::ui::ForgeAction::UseItem { item_name, target_id: _ } => {
-                    tactical_combat.combat_log.push(format!(
-                        "{} uses {}",
-                        participant_name, item_name
-                    ));
-                    
-                    // Handle different item types
-                    match item_name.as_str() {
-                        "Health Potion" => {
-                            let heal_amount = 10;
-                            tactical_combat.participants[participant_index].base_participant.heal(heal_amount);
-                            tactical_combat.combat_log.push(format!(
-                                "{} recovers {} HP!",
-                                participant_name, heal_amount
-                            ));
-                        }
-                        _ => {
-                            tactical_combat.combat_log.push("Item has no effect in combat".to_string());
-                        }
-                    }
-                }
-                crate::ui::ForgeAction::SwitchWeapon { new_weapon: _ } => {
-                    tactical_combat.combat_log.push(format!(
-                        "{} switches weapons",
-                        participant_name
-                    ));
-                    // TODO: Implement weapon switching logic
-                }
-                crate::ui::ForgeAction::EndTurn => {
-                    tactical_combat.combat_log.push(format!(
-                        "{} ends their turn",
-                        participant_name
-                    ));
-                }
-                crate::ui::ForgeAction::MoveOnly => {
-                    tactical_combat.combat_log.push(format!(
-                        "{} moves to a new position",
-                        participant_name
-                    ));
-                }
-            }
-        }
-    }
-    
-    // Calculate Forge Attack Value (AV)
-    fn calculate_forge_av(&self, participant: &crate::forge::TacticalCombatParticipant, weapon: &Option<crate::forge::Weapon>) -> u8 {
-        let base_av = participant.base_participant.combat_stats.attack_value;
-        let weapon_bonus = weapon.as_ref().map(|w| w.attack_bonus).unwrap_or(0);
-        
-        // For now, use a simple calculation since we don't have characteristics on participants
-        // In a full implementation, this would come from the character's dexterity
-        let characteristic_bonus = if participant.base_participant.is_player {
-            if let Some(character) = &self.current_character {
-                (character.characteristics.dexterity / 3.0) as u8
-            } else {
-                0
-            }
-        } else {
-            2 // Default bonus for NPCs
-        };
-        
-        (base_av as i8 + weapon_bonus + characteristic_bonus as i8).max(1) as u8
-    }
-    
-    // Calculate Forge Defensive Value (DV)
-    fn calculate_forge_dv(&self, participant: &crate::forge::TacticalCombatParticipant, attacker_id: Option<usize>) -> u8 {
-        let base_dv = participant.base_participant.combat_stats.defensive_value;
-        let armor_rating = participant.base_participant.armor.as_ref()
-            .map(|a| a.get_current_armor_rating()).unwrap_or(0);
-        let shield_rating = participant.base_participant.shield.as_ref()
-            .map(|s| s.get_current_armor_rating()).unwrap_or(0);
-        
-        // For now, use a simple calculation since we don't have characteristics on participants
-        let characteristic_bonus = if participant.base_participant.is_player {
-            if let Some(character) = &self.current_character {
-                (character.characteristics.awareness / 3.0) as u8
-            } else {
-                0
-            }
-        } else {
-            2 // Default bonus for NPCs
-        };
-        
-        // Apply Prime Opponent bonus if defending against designated opponent
-        let prime_opponent_bonus = if let Some(_attacker) = attacker_id {
-            // TODO: Implement prime opponent tracking properly
-            0
-        } else {
-            0
-        };
-        
-        base_dv + armor_rating + shield_rating + characteristic_bonus + prime_opponent_bonus
-    }
-    
-    // Check if attacker is participant's designated prime opponent
-    #[allow(dead_code)]
-    fn is_prime_opponent(&self, _participant: &crate::forge::TacticalCombatParticipant, _attacker_id: usize) -> bool {
-        // TODO: Implement prime opponent tracking in participants
-        false
-    }
-    
-    // Calculate Forge damage with proper dice mechanics
-    fn calculate_forge_damage(&self, weapon: &Option<crate::forge::Weapon>, critical: bool) -> ForgeDamageResult {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        
-        let (dice_count, damage_bonus) = if let Some(w) = weapon {
-            let (damage, dice) = w.roll_damage();
-            (dice, damage as i8 + w.damage_bonus)
-        } else {
-            // Unarmed combat: 1d3 base damage
-            let damage = rng.gen_range(1..=3);
-            (1, damage as i8)
-        };
-        
-        let mut total_damage = damage_bonus.max(1) as u32;
-        
-        if critical {
-            total_damage *= 2;
-        }
-        
-        ForgeDamageResult {
-            total_damage,
-            dice_count,
-            critical,
-        }
-    }
-    
-    // Execute spell effects in Forge combat
-    fn execute_forge_spell_effect(&mut self, tactical_combat: &mut crate::ui::TacticalCombatState, caster_index: usize, spell: &crate::forge::magic::Spell, target_type: &crate::ui::ForgeSpellTarget) {
-        match target_type {
-            crate::ui::ForgeSpellTarget::Self_ => {
-                // Apply spell to caster
-                self.apply_spell_effects_to_participant(tactical_combat, caster_index, spell);
-            }
-            crate::ui::ForgeSpellTarget::Participant(target_id) => {
-                // Apply spell to specific participant
-                self.apply_spell_effects_to_participant(tactical_combat, *target_id, spell);
-            }
-            crate::ui::ForgeSpellTarget::Position(_pos) => {
-                tactical_combat.combat_log.push("Positional spell effects not yet implemented".to_string());
-            }
-            crate::ui::ForgeSpellTarget::Area(_center, _radius) => {
-                tactical_combat.combat_log.push("Area spell effects not yet implemented".to_string());
-            }
-            crate::ui::ForgeSpellTarget::AllEnemies => {
-                // Apply to all enemy participants
-                let caster_is_player = tactical_combat.participants[caster_index].base_participant.is_player;
-                let target_indices: Vec<usize> = tactical_combat.participants.iter().enumerate()
-                    .filter(|(_, participant)| {
-                        participant.base_participant.is_player != caster_is_player && participant.base_participant.is_alive()
-                    })
-                    .map(|(i, _)| i)
-                    .collect();
-                
-                for target_index in target_indices {
-                    self.apply_spell_effects_to_participant(tactical_combat, target_index, spell);
-                }
-            }
-            crate::ui::ForgeSpellTarget::AllAllies => {
-                // Apply to all allied participants
-                let caster_is_player = tactical_combat.participants[caster_index].base_participant.is_player;
-                let target_indices: Vec<usize> = tactical_combat.participants.iter().enumerate()
-                    .filter(|(_, participant)| {
-                        participant.base_participant.is_player == caster_is_player && participant.base_participant.is_alive()
-                    })
-                    .map(|(i, _)| i)
-                    .collect();
-                
-                for target_index in target_indices {
-                    self.apply_spell_effects_to_participant(tactical_combat, target_index, spell);
-                }
-            }
-        }
-    }
-    
-    // Apply individual spell effects to a participant
-    fn apply_spell_effects_to_participant(&mut self, tactical_combat: &mut crate::ui::TacticalCombatState, target_index: usize, spell: &crate::forge::magic::Spell) {
-        if let Some(target) = tactical_combat.participants.get_mut(target_index) {
-            let target_name = target.base_participant.name.clone();
-            
-            for effect in &spell.effects {
-                match effect {
-                    crate::forge::magic::SpellEffect::Damage { dice, bonus, damage_type: _ } => {
-                        let damage_roll = self.roll_spell_damage(dice, *bonus);
-                        let (actual_damage, armor_absorbed) = target.base_participant.take_damage(damage_roll, 1);
-                        
-                        tactical_combat.combat_log.push(format!(
-                            "{} takes {} magical damage ({} to HP, {} absorbed)",
-                            target_name, damage_roll, actual_damage, armor_absorbed
-                        ));
-                    }
-                    crate::forge::magic::SpellEffect::Heal { dice, bonus } => {
-                        let heal_amount = self.roll_spell_damage(dice, *bonus);
-                        target.base_participant.heal(heal_amount);
-                        
-                        tactical_combat.combat_log.push(format!(
-                            "{} recovers {} HP from magical healing",
-                            target_name, heal_amount
-                        ));
-                    }
-                    crate::forge::magic::SpellEffect::Buff { stat: _, modifier: _, duration: _ } => {
-                        tactical_combat.combat_log.push(format!(
-                            "{} is affected by a magical enhancement",
-                            target_name
-                        ));
-                        // TODO: Implement buff system
-                    }
-                    crate::forge::magic::SpellEffect::Debuff { stat: _, modifier: _, duration: _ } => {
-                        tactical_combat.combat_log.push(format!(
-                            "{} is affected by a magical debilitation",
-                            target_name
-                        ));
-                        // TODO: Implement debuff system
-                    }
-                    crate::forge::magic::SpellEffect::Special { effect, duration: _ } => {
-                        tactical_combat.combat_log.push(format!(
-                            "{} is affected by: {}",
-                            target_name, effect
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    
-    // Roll spell damage dice
-    fn roll_spell_damage(&self, dice: &str, bonus: i8) -> u32 {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        
-        // Parse dice notation (e.g., "2d6", "1d4+1")
-        let parts: Vec<&str> = dice.split('d').collect();
-        if parts.len() == 2 {
-            let num_dice: u32 = parts[0].parse().unwrap_or(1);
-            let die_size: u32 = parts[1].parse().unwrap_or(6);
-            
-            let mut total = 0;
-            for _ in 0..num_dice {
-                total += rng.gen_range(1..=(die_size));
-            }
-            
-            (total as i32 + bonus as i32).max(1) as u32
-        } else {
-            1 // Default to 1 damage if parsing fails
-        }
-    }
-
-    fn update_tactical_cursor_position(&self, tactical_combat_state: &mut crate::ui::TacticalCombatState) {
-        // Clamp cursor to battlefield bounds (no camera needed with fixed viewport)
-        tactical_combat_state.cursor_position.x = tactical_combat_state.cursor_position.x
-            .max(0)
-            .min(tactical_combat_state.battlefield.width as i32 - 1);
-        tactical_combat_state.cursor_position.y = tactical_combat_state.cursor_position.y
-            .max(0)
-            .min(tactical_combat_state.battlefield.height as i32 - 1);
-    }
-    
-    fn execute_tactical_movement(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        let current_participant_id = tactical_combat_state.current_participant_index;
-        let target_position = tactical_combat_state.cursor_position;
-        
-        // Check if movement is valid
-        if tactical_combat_state.battlefield.is_position_passable(&target_position) {
-            // Calculate movement cost and check if participant has enough movement
-            if let Some(current_pos) = tactical_combat_state.battlefield.get_participant_position(current_participant_id) {
-                let distance = current_pos.manhattan_distance_to(&target_position) as u32;
-                let movement_cost = tactical_combat_state.battlefield.get_movement_cost(&target_position) * distance;
-                
-                if let Some(participant) = tactical_combat_state.participants.get_mut(current_participant_id) {
-                    if participant.movement_remaining >= movement_cost {
-                        // Execute movement
-                        tactical_combat_state.battlefield.move_participant(current_participant_id, target_position).map_err(|e| anyhow::anyhow!(e))?;
-                        participant.movement_remaining -= movement_cost;
-                        participant.position = target_position;
-                        
-                        tactical_combat_state.combat_log.push(format!(
-                            "{} moves to ({}, {})", 
-                            participant.base_participant.name, 
-                            target_position.x, 
-                            target_position.y
-                        ));
-                        
-                        // Check for environmental effects
-                        if let Some(tile) = tactical_combat_state.battlefield.tiles.get(&target_position) {
-                            if let Some(effect) = &tile.on_enter_effect {
-                                tactical_combat_state.combat_log.push(format!(
-                                    "{} triggers: {}", 
-                                    participant.base_participant.name, 
-                                    effect
-                                ));
-                                // TODO: Apply environmental effects
-                            }
-                        }
-                        
-                        // Check if this was a "Move Only" action or regular movement
-                        // If movement_remaining > 0, player can continue moving or choose actions
-                        if participant.movement_remaining > 0 {
-                            tactical_combat_state.combat_log.push("Movement complete. Options:".to_string());
-                            tactical_combat_state.combat_log.push("• Continue moving (ENTER on new position)".to_string());
-                            tactical_combat_state.combat_log.push("• Quick actions (Q) - buffs, potions, etc.".to_string());
-                            tactical_combat_state.combat_log.push("• End turn (E) - no attack".to_string());
-                            tactical_combat_state.combat_log.push("• Action menu (TAB) - attack, spells".to_string());
-                            // Stay in movement phase to allow more movement or end turn
-                            tactical_combat_state.update_movement_highlights();
-                        } else {
-                            // No movement left, transition to action selection
-                            tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                            tactical_combat_state.action_menu_open = true;
-                            self.populate_available_actions(tactical_combat_state);
-                        }
-                    } else {
-                        tactical_combat_state.combat_log.push("Not enough movement remaining!".to_string());
-                    }
-                }
-            }
-        } else {
-            tactical_combat_state.combat_log.push("Cannot move to that position!".to_string());
-        }
-        
-        Ok(())
-    }
-    
-    fn execute_end_turn(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        let current_participant_id = tactical_combat_state.current_participant_index;
-        
-        if let Some(participant) = tactical_combat_state.participants.get_mut(current_participant_id) {
-            participant.has_acted = true;
-            tactical_combat_state.combat_log.push(format!(
-                "{} ends their turn", 
-                participant.base_participant.name
-            ));
-        }
-        
-        // Reset movement for next turn
-        tactical_combat_state.highlighted_positions.clear();
-        tactical_combat_state.action_menu_open = false;
-        
-        // Advance to next participant and process AI turns automatically
-        tactical_combat_state.next_participant();
-        
-        // Continue processing AI turns until we reach a player
-        self.process_ai_turns_until_player(tactical_combat_state)?;
-        
-        Ok(())
-    }
-    
-    fn execute_weapon_switch(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        if let Some(character) = &mut self.current_character {
-            // Simple weapon switching: toggle between equipped weapon and a default weapon
-            let current_participant_id = tactical_combat_state.current_participant_index;
-            
-            if let Some(participant) = tactical_combat_state.participants.get_mut(current_participant_id) {
-                let old_weapon_name = if let Some(weapon) = &participant.base_participant.weapon {
-                    weapon.name.clone()
-                } else {
-                    "None".to_string()
-                };
-                
-                // Simple toggle between rusty sword and crossbow for demonstration
-                if let Some(current_weapon) = &participant.base_participant.weapon {
-                    if current_weapon.ranged {
-                        // Switch from ranged to melee
-                        participant.base_participant.weapon = Some(crate::forge::Weapon::rusty_sword());
-                        character.equipment.weapon = Some(crate::forge::Weapon::rusty_sword());
-                        tactical_combat_state.combat_log.push(format!(
-                            "{} switches from {} to Rusty Sword", 
-                            participant.base_participant.name,
-                            old_weapon_name
-                        ));
-                    } else {
-                        // Switch from melee to ranged  
-                        participant.base_participant.weapon = Some(crate::forge::Weapon::crossbow());
-                        character.equipment.weapon = Some(crate::forge::Weapon::crossbow());
-                        tactical_combat_state.combat_log.push(format!(
-                            "{} switches from {} to Crossbow", 
-                            participant.base_participant.name,
-                            old_weapon_name
-                        ));
-                    }
-                } else {
-                    // No weapon equipped, equip rusty sword
-                    participant.base_participant.weapon = Some(crate::forge::Weapon::rusty_sword());
-                    character.equipment.weapon = Some(crate::forge::Weapon::rusty_sword());
-                    tactical_combat_state.combat_log.push(format!(
-                        "{} equips Rusty Sword", 
-                        participant.base_participant.name
-                    ));
-                }
-            }
-        }
-        
-        tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalMovement;
-        tactical_combat_state.action_menu_open = false;
-        Ok(())
-    }
-    
-    fn populate_available_actions(&self, tactical_combat_state: &mut crate::ui::TacticalCombatState) {
-        tactical_combat_state.available_actions.clear();
-        tactical_combat_state.available_actions.push("Move Only".to_string());
-        tactical_combat_state.available_actions.push("Attack".to_string());
-        tactical_combat_state.available_actions.push("Cast Spell".to_string());
-        tactical_combat_state.available_actions.push("Use Item/Potion".to_string());
-        tactical_combat_state.available_actions.push("Switch Weapon".to_string());
-        tactical_combat_state.available_actions.push("Defend".to_string());
-        tactical_combat_state.available_actions.push("End Turn".to_string());
-        tactical_combat_state.available_actions.push("Interact".to_string());
-        tactical_combat_state.selected_action_index = 0;
-    }
-    
-    fn select_tactical_action(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        if let Some(action_name) = tactical_combat_state.available_actions.get(tactical_combat_state.selected_action_index) {
-            match action_name.as_str() {
-                "Move Only" => {
-                    // Allow movement without requiring an attack
-                    tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalMovement;
-                    tactical_combat_state.action_menu_open = false;
-                    tactical_combat_state.update_movement_highlights();
-                    tactical_combat_state.combat_log.push("MOVE ONLY MODE:".to_string());
-                    tactical_combat_state.combat_log.push("• WASD/HJKL: Move cursor to position".to_string());
-                    tactical_combat_state.combat_log.push("• ENTER: Move there and continue turn".to_string());
-                    tactical_combat_state.combat_log.push("• E: End turn without attacking".to_string());
-                    tactical_combat_state.combat_log.push("• Yellow highlights show valid positions".to_string());
-                }
-                "Attack" => {
-                    tactical_combat_state.selected_action = Some(crate::forge::TacticalCombatAction::Attack { target_id: 0 });
-                    tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalTargeting;
-                    self.find_attack_targets(tactical_combat_state);
-                }
-                "Cast Spell" => {
-                    // Open spell selection menu
-                    tactical_combat_state.spell_menu_open = true;
-                    tactical_combat_state.action_menu_open = false;
-                    self.populate_available_spells(tactical_combat_state)?;
-                }
-                "Use Item/Potion" => {
-                    // TODO: Implement item selection submenu
-                    tactical_combat_state.selected_action = Some(crate::forge::TacticalCombatAction::UseItem { 
-                        item_name: "Health Potion".to_string(), 
-                        target_id: None 
-                    });
-                    tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalTargeting;
-                    tactical_combat_state.combat_log.push("Using Health Potion (placeholder)".to_string());
-                }
-                "Switch Weapon" => {
-                    self.execute_weapon_switch(tactical_combat_state)?;
-                }
-                "Defend" => {
-                    tactical_combat_state.selected_action = Some(crate::forge::TacticalCombatAction::Defend);
-                    self.execute_tactical_action(tactical_combat_state)?;
-                }
-                "End Turn" => {
-                    self.execute_end_turn(tactical_combat_state)?;
-                }
-                "Interact" => {
-                    tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalEnvironmentalInteraction;
-                    self.find_environmental_features(tactical_combat_state);
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-    
-    fn find_attack_targets(&self, tactical_combat_state: &mut crate::ui::TacticalCombatState) {
-        tactical_combat_state.available_targets.clear();
-        let current_participant_id = tactical_combat_state.current_participant_index;
-        
-        if let Some(current_pos) = tactical_combat_state.battlefield.get_participant_position(current_participant_id) {
-            // Find enemies within attack range (adjacent for melee, or weapon range)
-            for (target_id, target_pos) in tactical_combat_state.battlefield.participant_positions.iter() {
-                if *target_id != current_participant_id {
-                    if let Some(participant) = tactical_combat_state.participants.get(*target_id) {
-                        if !participant.base_participant.is_player && participant.base_participant.is_alive() {
-                            // Check if target is in range (for now, just adjacent)
-                            if current_pos.is_adjacent_to(target_pos) || 
-                               tactical_combat_state.battlefield.has_line_of_sight(&current_pos, target_pos) {
-                                tactical_combat_state.available_targets.push(*target_id);
-                                tactical_combat_state.highlighted_positions.push(*target_pos);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    fn find_environmental_features(&self, tactical_combat_state: &mut crate::ui::TacticalCombatState) {
-        tactical_combat_state.available_environmental_features.clear();
-        let current_participant_id = tactical_combat_state.current_participant_index;
-        
-        if let Some(current_pos) = tactical_combat_state.battlefield.get_participant_position(current_participant_id) {
-            // Find activatable environmental features within range
-            for feature in &tactical_combat_state.battlefield.environmental_features {
-                if feature.activatable && current_pos.is_adjacent_to(&feature.position) {
-                    tactical_combat_state.available_environmental_features.push(feature.clone());
-                }
-            }
-        }
-        
-        if !tactical_combat_state.available_environmental_features.is_empty() {
-            tactical_combat_state.selected_feature_index = Some(0);
-        }
-    }
-    
-    fn execute_tactical_action(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        if let Some(action) = tactical_combat_state.selected_action.take() {
-            match action {
-                crate::forge::TacticalCombatAction::Attack { target_id } => {
-                    self.execute_tactical_attack(tactical_combat_state, target_id)?;
-                }
-                crate::forge::TacticalCombatAction::CastSpell { spell_name, target_position, target_id } => {
-                    self.execute_tactical_spell(tactical_combat_state, spell_name, target_position, target_id)?;
-                }
-                crate::forge::TacticalCombatAction::Defend => {
-                    if let Some(participant) = tactical_combat_state.participants.get_mut(tactical_combat_state.current_participant_index) {
-                        tactical_combat_state.combat_log.push(format!("{} takes a defensive stance!", participant.base_participant.name));
-                        // TODO: Apply defensive bonus
-                    }
-                }
-                crate::forge::TacticalCombatAction::Wait => {
-                    if let Some(participant) = tactical_combat_state.participants.get_mut(tactical_combat_state.current_participant_index) {
-                        tactical_combat_state.combat_log.push(format!("{} waits...", participant.base_participant.name));
-                    }
-                }
-                _ => {
-                    tactical_combat_state.combat_log.push("Action not yet implemented!".to_string());
-                }
-            }
-        }
-        
-        // Mark current participant as having acted
-        if let Some(participant) = tactical_combat_state.participants.get_mut(tactical_combat_state.current_participant_index) {
-            participant.has_acted = true;
-        }
-        
-        // Move to next participant or end turn
-        self.advance_tactical_turn(tactical_combat_state)?;
-        Ok(())
-    }
-    
-    fn execute_tactical_attack(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, target_id: usize) -> anyhow::Result<()> {
-        let attacker_id = tactical_combat_state.current_participant_index;
-        
-        if let (Some(attacker), Some(target)) = (
-            tactical_combat_state.participants.get(attacker_id).cloned(),
-            tactical_combat_state.participants.get_mut(target_id)
-        ) {
-            let mut rng = rand::thread_rng();
-            let attack_roll = rng.gen_range(1..=20);
-            let hit_threshold = target.base_participant.combat_stats.defensive_value;
-            
-            if (attack_roll + attacker.base_participant.combat_stats.attack_value as i32) >= hit_threshold as i32 {
-                // Hit!
-                let damage = if let Some(weapon) = &attacker.base_participant.weapon {
-                    // Calculate weapon damage
-                    let base_damage = rng.gen_range(1..=8); // Simplified damage roll
-                    base_damage + weapon.damage_bonus as u32 + attacker.base_participant.combat_stats.damage_bonus.max(0) as u32
-                } else {
-                    // Unarmed attack
-                    rng.gen_range(1..=4) + attacker.base_participant.combat_stats.damage_bonus.max(0) as u32
-                };
-                
-                target.base_participant.take_damage(damage, 1);
-                tactical_combat_state.combat_log.push(format!(
-                    "⚔️ {} hits {} for {} damage!", 
-                    attacker.base_participant.name, 
-                    target.base_participant.name, 
-                    damage
-                ));
-                
-                if !target.base_participant.is_alive() {
-                    tactical_combat_state.combat_log.push(format!(
-                        "💀 {} is defeated!", 
-                        target.base_participant.name
-                    ));
-                }
-            } else {
-                tactical_combat_state.combat_log.push(format!(
-                    "🛡️ {} misses {}!", 
-                    attacker.base_participant.name, 
-                    target.base_participant.name
-                ));
-            }
-        }
-        
-        Ok(())
-    }
-    
-    fn move_player_on_battlefield(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, dx: i32, dy: i32) -> anyhow::Result<()> {
-        let current_participant_id = tactical_combat_state.current_participant_index;
-        
-        if let Some(participant) = tactical_combat_state.participants.get_mut(current_participant_id) {
-            let new_x = (participant.position.x + dx).max(0).min(tactical_combat_state.battlefield.width as i32 - 1);
-            let new_y = (participant.position.y + dy).max(0).min(tactical_combat_state.battlefield.height as i32 - 1);
-            let new_position = crate::forge::BattlefieldPosition { x: new_x, y: new_y };
-            
-            // Check if the new position is valid (not occupied by another participant)
-            let position_occupied = tactical_combat_state.battlefield.participant_positions
-                .iter()
-                .any(|(id, pos)| *id != current_participant_id && *pos == new_position);
-            
-            if !position_occupied && participant.movement_remaining > 0 {
-                // Update participant position
-                let old_position = participant.position;
-                participant.position = new_position;
-                participant.movement_remaining = participant.movement_remaining.saturating_sub(1);
-                
-                // Update battlefield position mapping
-                tactical_combat_state.battlefield.participant_positions.insert(current_participant_id, new_position);
-                
-                tactical_combat_state.combat_log.push(format!(
-                    "🚶 {} moves from ({}, {}) to ({}, {}). Movement remaining: {}",
-                    participant.base_participant.name,
-                    old_position.x, old_position.y,
-                    new_position.x, new_position.y,
-                    participant.movement_remaining
-                ));
-                
-                // Update cursor to follow player
-                tactical_combat_state.cursor_position = new_position;
-                tactical_combat_state.update_movement_highlights();
-            } else if position_occupied {
-                tactical_combat_state.combat_log.push(format!(
-                    "❌ Cannot move to ({}, {}) - position occupied",
-                    new_x, new_y
-                ));
-            } else {
-                tactical_combat_state.combat_log.push(format!(
-                    "❌ {} has no movement remaining", 
-                    participant.base_participant.name
-                ));
-            }
-        }
-        
-        Ok(())
-    }
-    
-    fn activate_environmental_feature(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        if let Some(feature_index) = tactical_combat_state.selected_feature_index {
-            if let Some(feature) = tactical_combat_state.available_environmental_features.get(feature_index) {
-                if let Some(effect) = &feature.activation_effect {
-                    tactical_combat_state.combat_log.push(format!(
-                        "🔧 {} activates {}: {}", 
-                        tactical_combat_state.participants[tactical_combat_state.current_participant_index].base_participant.name,
-                        feature.name,
-                        effect
-                    ));
-                    // TODO: Apply environmental feature effects
-                }
-                
-                // Mark participant as having acted
-                if let Some(participant) = tactical_combat_state.participants.get_mut(tactical_combat_state.current_participant_index) {
-                    participant.has_acted = true;
-                }
-                
-                self.advance_tactical_turn(tactical_combat_state)?;
-            }
-        }
-        Ok(())
-    }
-    
-    fn advance_tactical_turn(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        // Check if combat is over
-        let players_alive = tactical_combat_state.participants.iter().any(|p| p.base_participant.is_player && p.base_participant.is_alive());
-        let enemies_alive = tactical_combat_state.participants.iter().any(|p| !p.base_participant.is_player && p.base_participant.is_alive());
-        
-        if !players_alive {
-            tactical_combat_state.combat_phase = crate::ui::CombatPhase::CombatComplete(false);
-            return Ok(());
-        } else if !enemies_alive {
-            tactical_combat_state.combat_phase = crate::ui::CombatPhase::CombatComplete(true);
-            return Ok(());
-        }
-        
-        // Find next participant who hasn't acted
-        let mut next_participant_index = (tactical_combat_state.current_participant_index + 1) % tactical_combat_state.participants.len();
-        let mut attempts = 0;
-        
-        while attempts < tactical_combat_state.participants.len() {
-            if let Some(participant) = tactical_combat_state.participants.get(next_participant_index) {
-                if participant.base_participant.is_alive() && !participant.has_acted {
-                    tactical_combat_state.current_participant_index = next_participant_index;
-                    
-                    if participant.base_participant.is_player {
-                        // Reset movement for player turn
-                        if let Some(current_participant) = tactical_combat_state.participants.get_mut(next_participant_index) {
-                            current_participant.movement_remaining = current_participant.movement_capabilities.movement_speed;
-                        }
-                        tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalMovement;
-                        // Show movement highlights when starting movement phase
-                        tactical_combat_state.update_movement_highlights();
-                    } else {
-                        // AI turn - process automatically and continue until player turn
-                        self.execute_ai_turn(tactical_combat_state, next_participant_index)?;
-                        // Continue processing AI turns automatically
-                        return self.advance_tactical_turn(tactical_combat_state);
-                    }
-                    return Ok(());
-                }
-            }
-            next_participant_index = (next_participant_index + 1) % tactical_combat_state.participants.len();
-            attempts += 1;
-        }
-        
-        // All participants have acted, start new round
-        tactical_combat_state.round += 1;
-        for participant in &mut tactical_combat_state.participants {
-            participant.has_acted = false;
-            participant.movement_remaining = participant.movement_capabilities.movement_speed;
-        }
-        
-        // Start with first alive participant
-        for (index, participant) in tactical_combat_state.participants.iter().enumerate() {
-            if participant.base_participant.is_alive() {
-                tactical_combat_state.current_participant_index = index;
-                if participant.base_participant.is_player {
-                    tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalMovement;
-                    // Show movement highlights when starting combat
-                    tactical_combat_state.update_movement_highlights();
-                } else {
-                    // AI turn at start of new round - process automatically
-                    self.execute_ai_turn(tactical_combat_state, index)?;
-                    // Continue processing turns automatically until player turn
-                    return self.advance_tactical_turn(tactical_combat_state);
-                }
-                break;
-            }
-        }
-        
-        Ok(())
-    }
-    
-    // Process AI turns automatically until we reach a player turn
-    fn process_ai_turns_until_player(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        let mut safety_counter = 0;
-        const MAX_ITERATIONS: usize = 20; // Prevent infinite loops
-        
-        while !tactical_combat_state.is_player_turn() && !tactical_combat_state.is_combat_over() && safety_counter < MAX_ITERATIONS {
-            let current_index = tactical_combat_state.current_participant_index;
-            
-            // Execute AI turn
-            self.execute_ai_turn(tactical_combat_state, current_index)?;
-            
-            // Mark AI as having acted
-            if let Some(participant) = tactical_combat_state.participants.get_mut(current_index) {
-                participant.has_acted = true;
-            }
-            
-            // Advance to next participant
-            tactical_combat_state.next_participant();
-            
-            safety_counter += 1;
-        }
-        
-        // If we hit max iterations, log a warning
-        if safety_counter >= MAX_ITERATIONS {
-            tactical_combat_state.combat_log.push("⚠️ AI processing limit reached".to_string());
-        }
-        
-        Ok(())
-    }
-    
-    // Helper functions for the new simplified combat system
-    fn has_available_spells(&self, tactical_combat: &crate::ui::TacticalCombatState) -> bool {
-        if let Some(participant) = tactical_combat.participants.get(tactical_combat.current_participant_index) {
-            !participant.base_participant.magic.known_spells.is_empty()
-        } else {
-            false
-        }
-    }
-    
-    fn execute_defend_action(&mut self, tactical_combat: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        if let Some(participant) = tactical_combat.participants.get_mut(tactical_combat.current_participant_index) {
-            tactical_combat.combat_log.push(format!("{} takes a defensive stance!", participant.base_participant.name));
-            participant.has_acted = true;
-            // TODO: Apply defensive bonus
-        }
-        
-        // Move to next participant
-        self.advance_tactical_turn(tactical_combat)?;
-        Ok(())
-    }
-    
-    fn execute_ai_turn(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, ai_participant_index: usize) -> anyhow::Result<()> {
-        // Enhanced AI: personality-driven tactical decisions
-        let (ai_name, ai_pos, movement_speed, ai_personality) = {
-            if let Some(ai_participant) = tactical_combat_state.participants.get(ai_participant_index) {
-                (
-                    ai_participant.base_participant.name.clone(),
-                    ai_participant.position,
-                    ai_participant.movement_capabilities.movement_speed,
-                    ai_participant.base_participant.ai_personality.clone()
-                )
-            } else {
-                tactical_combat_state.combat_log.push("❌ Error: AI participant not found".to_string());
-                return Ok(());
-            }
-        };
-        
-        // Log AI turn start
-        tactical_combat_state.combat_log.push(format!("🤖 {}'s turn", ai_name));
-        
-        // Reset movement for AI turn
-        if let Some(ai_participant_mut) = tactical_combat_state.participants.get_mut(ai_participant_index) {
-            ai_participant_mut.movement_remaining = ai_participant_mut.movement_capabilities.movement_speed;
-        }
-            
-            // Check if AI can attack someone immediately
-            if let Some(target_id) = tactical_combat_state.battlefield.find_best_attack_target(ai_participant_index, &tactical_combat_state.participants) {
-                tactical_combat_state.combat_log.push(format!("⚔️ {} attacks!", ai_name));
-                self.execute_tactical_attack(tactical_combat_state, target_id)?;
-            } else {
-                // No immediate attack available, decide on movement based on personality
-                if let Some(personality) = &ai_personality {
-                    match personality.behavior_type {
-                        crate::forge::AIBehaviorType::Coward => {
-                            // Cowards try to flee if hurt or outnumbered
-                            let health_pct = if let Some(ai_participant) = tactical_combat_state.participants.get(ai_participant_index) {
-                                ai_participant.base_participant.get_health_percentage()
-                            } else { 100 };
-                            if health_pct < personality.health_threshold {
-                                if let Some(flee_pos) = self.find_flee_position(tactical_combat_state, ai_participant_index, movement_speed) {
-                                    self.move_ai_to_position(tactical_combat_state, ai_participant_index, flee_pos, "retreats to a safer position")?;
-                                } else {
-                                    tactical_combat_state.combat_log.push(format!("{} cowers defensively", ai_name));
-                                }
-                            } else {
-                                // Move cautiously toward combat
-                                if let Some(new_pos) = self.find_cautious_approach_position(tactical_combat_state, ai_participant_index, movement_speed) {
-                                    self.move_ai_to_position(tactical_combat_state, ai_participant_index, new_pos, "advances cautiously")?;
-                                }
-                            }
-                        }
-                        crate::forge::AIBehaviorType::Aggressive | crate::forge::AIBehaviorType::Berserker => {
-                            // Aggressive AI charges toward nearest enemy
-                            if let Some(target_pos) = self.find_nearest_enemy_position(tactical_combat_state, ai_participant_index) {
-                                if let Some(new_pos) = self.find_direct_approach_position(ai_pos, target_pos, movement_speed, &tactical_combat_state.battlefield) {
-                                    self.move_ai_to_position(tactical_combat_state, ai_participant_index, new_pos, "charges forward aggressively")?;
-                                }
-                            }
-                        }
-                        crate::forge::AIBehaviorType::Tactical => {
-                            // Tactical AI uses battlefield positioning
-                            if let Some(best_pos) = tactical_combat_state.battlefield.find_best_tactical_position(
-                                ai_participant_index, &tactical_combat_state.participants, movement_speed) {
-                                self.move_ai_to_position(tactical_combat_state, ai_participant_index, best_pos, "moves to a tactical position")?;
-                            } else {
-                                // If no better position found, advance carefully
-                                if let Some(target_pos) = self.find_nearest_enemy_position(tactical_combat_state, ai_participant_index) {
-                                    if let Some(new_pos) = self.find_tactical_approach_position(ai_pos, target_pos, movement_speed, &tactical_combat_state.battlefield) {
-                                        self.move_ai_to_position(tactical_combat_state, ai_participant_index, new_pos, "advances tactically")?;
-                                    }
-                                }
-                            }
-                        }
-                        crate::forge::AIBehaviorType::Defensive => {
-                            // Defensive AI looks for cover and defensive positions
-                            if let Some(cover_pos) = self.find_defensive_position(tactical_combat_state, ai_participant_index, movement_speed) {
-                                self.move_ai_to_position(tactical_combat_state, ai_participant_index, cover_pos, "moves to a defensive position")?;
-                            } else {
-                                // Move toward enemies but maintain distance
-                                if let Some(target_pos) = self.find_nearest_enemy_position(tactical_combat_state, ai_participant_index) {
-                                    if let Some(new_pos) = self.find_ranged_position(ai_pos, target_pos, movement_speed, &tactical_combat_state.battlefield) {
-                                        self.move_ai_to_position(tactical_combat_state, ai_participant_index, new_pos, "maintains defensive distance")?;
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            // Balanced/default behavior
-                            if let Some(target_pos) = self.find_nearest_enemy_position(tactical_combat_state, ai_participant_index) {
-                                if let Some(new_pos) = self.find_balanced_approach_position(ai_pos, target_pos, movement_speed, &tactical_combat_state.battlefield) {
-                                    self.move_ai_to_position(tactical_combat_state, ai_participant_index, new_pos, "advances steadily")?;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // Fallback: basic movement toward nearest enemy
-                    if let Some(target_pos) = self.find_nearest_enemy_position(tactical_combat_state, ai_participant_index) {
-                        if let Some(new_pos) = self.find_direct_approach_position(ai_pos, target_pos, 1, &tactical_combat_state.battlefield) {
-                            self.move_ai_to_position(tactical_combat_state, ai_participant_index, new_pos, "moves forward")?;
-                        }
-                    }
-                }
-            }
-            
-            // Ensure AI always takes some action - if nothing else, just end turn
-            let action_taken = tactical_combat_state.combat_log.iter().rev().take(3).any(|log| log.contains(&ai_name));
-            if !action_taken {
-                tactical_combat_state.combat_log.push(format!("⏭️ {} hesitates and ends turn", ai_name));
-            }
-            
-            // Mark AI as having acted
-            if let Some(ai_participant) = tactical_combat_state.participants.get_mut(ai_participant_index) {
-                ai_participant.has_acted = true;
-                tactical_combat_state.combat_log.push(format!("✅ {} completed turn", ai_name));
-            }
-        
-        Ok(())
-    }
-    
-    fn award_tactical_combat_experience(&mut self, tactical_combat_state: &crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        if let Some(character) = &mut self.current_character {
-            let mut total_xp = 0;
-            
-            for participant in &tactical_combat_state.participants {
-                if !participant.base_participant.is_player && !participant.base_participant.is_alive() {
-                    let creature_xp = participant.base_participant.combat_stats.hit_points.max + 
-                        (participant.base_participant.combat_stats.attack_value as u32) + 
-                        (participant.base_participant.combat_stats.defensive_value as u32);
-                    total_xp += creature_xp;
-                }
-            }
-            
-            character.experience += total_xp;
-            
-            let xp_for_next_level = (character.level as u32 + 1) * 100;
-            if character.experience >= xp_for_next_level {
-                character.level += 1;
-                character.experience -= xp_for_next_level;
-                character.combat_stats.hit_points.max += 5;
-                character.combat_stats.hit_points.current = character.combat_stats.hit_points.max;
-            }
-        }
-        
-        Ok(())
-    }
-    
-    fn populate_available_spells(&self, tactical_combat_state: &mut crate::ui::TacticalCombatState) -> anyhow::Result<()> {
-        tactical_combat_state.available_spells.clear();
-        
-        if let Some(character) = &self.current_character {
-            let all_spells = crate::forge::magic::create_starter_spells();
-            
-            for (_school, spell_name) in character.magic.get_all_known_spells() {
-                if let Some(spell) = all_spells.get(&spell_name) {
-                    if character.magic.can_cast_spell(spell) {
-                        tactical_combat_state.available_spells.push((spell_name.clone(), spell.clone()));
-                    }
-                }
-            }
-        }
-        
-        tactical_combat_state.selected_spell_index = 0;
-        Ok(())
-    }
-    
-    fn handle_spell_selection(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, key: KeyEvent) -> anyhow::Result<()> {
-        if tactical_combat_state.enhancement_menu_open {
-            // Handle enhancement menu input
-            self.handle_enhancement_selection(tactical_combat_state, key)
-        } else {
-            // Handle main spell selection input
-            match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if tactical_combat_state.selected_spell_index > 0 {
-                        tactical_combat_state.selected_spell_index -= 1;
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if tactical_combat_state.selected_spell_index < tactical_combat_state.available_spells.len().saturating_sub(1) {
-                        tactical_combat_state.selected_spell_index += 1;
-                    }
-                }
-                KeyCode::Enter | KeyCode::Char(' ') => {
-                    // Cast spell normally without enhancement
-                    self.cast_selected_spell(tactical_combat_state, false)?
-                }
-                KeyCode::Char('e') | KeyCode::Char('E') => {
-                    // Open enhancement menu
-                    if let Some((_, spell)) = tactical_combat_state.available_spells.get(tactical_combat_state.selected_spell_index) {
-                        if spell.max_pumps > 0 {
-                            tactical_combat_state.enhancement_menu_open = true;
-                            tactical_combat_state.current_enhancement = crate::forge::magic::SpellEnhancement::default();
-                        } else {
-                            tactical_combat_state.combat_log.push("This spell cannot be enhanced.".to_string());
-                        }
-                    }
-                }
-                KeyCode::Esc => {
-                    tactical_combat_state.spell_menu_open = false;
-                    tactical_combat_state.action_menu_open = true;
-                }
-                _ => {}
-            }
-            Ok(())
-        }
-    }
-    
-    fn handle_enhancement_selection(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, key: KeyEvent) -> anyhow::Result<()> {
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                if tactical_combat_state.selected_enhancement_category > 0 {
-                    tactical_combat_state.selected_enhancement_category -= 1;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if tactical_combat_state.selected_enhancement_category < tactical_combat_state.enhancement_categories.len().saturating_sub(1) {
-                    tactical_combat_state.selected_enhancement_category += 1;
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                // Toggle enhancement for selected category
-                self.toggle_spell_enhancement(tactical_combat_state);
-            }
-            KeyCode::Char('c') | KeyCode::Char('C') => {
-                // Cast enhanced spell
-                self.cast_selected_spell(tactical_combat_state, true)?
-            }
-            KeyCode::Esc => {
-                // Return to spell selection
-                tactical_combat_state.enhancement_menu_open = false;
-                tactical_combat_state.current_enhancement = crate::forge::magic::SpellEnhancement::default();
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-    
-    fn toggle_spell_enhancement(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState) {
-        if let Some((_, spell)) = tactical_combat_state.available_spells.get(tactical_combat_state.selected_spell_index) {
-            // Get current spell points first to avoid borrowing conflict
-            let current_sp = if let Some(participant) = tactical_combat_state.get_current_participant() {
-                participant.base_participant.magic.spell_points.current
-            } else {
-                0
-            };
-            
-            let enhancement = &mut tactical_combat_state.current_enhancement;
-            
-            // Check if we can add more pumps
-            if enhancement.pumps >= spell.max_pumps {
-                tactical_combat_state.combat_log.push("Maximum enhancements reached for this spell.".to_string());
-                return;
-            }
-            
-            // Toggle the selected enhancement category
-            match tactical_combat_state.selected_enhancement_category {
-                0 => enhancement.enhanced_range = !enhancement.enhanced_range,
-                1 => enhancement.enhanced_duration = !enhancement.enhanced_duration,
-                2 => enhancement.enhanced_damage = !enhancement.enhanced_damage,
-                3 => enhancement.enhanced_save_modifier = !enhancement.enhanced_save_modifier,
-                4 => enhancement.enhanced_success_chance = !enhancement.enhanced_success_chance,
-                _ => {}
-            }
-            
-            // Recalculate pumps and total cost
-            enhancement.pumps = [enhancement.enhanced_range, enhancement.enhanced_duration, 
-                               enhancement.enhanced_damage, enhancement.enhanced_save_modifier,
-                               enhancement.enhanced_success_chance].iter().filter(|&&x| x).count() as u8;
-            
-            enhancement.total_cost = spell.cost + (spell.additional_spell_points * enhancement.pumps);
-            
-            // Check if character has enough spell points
-            if current_sp < enhancement.total_cost as u32 {
-                    tactical_combat_state.combat_log.push("Not enough spell points for this enhancement!".to_string());
-                    // Revert the toggle
-                    match tactical_combat_state.selected_enhancement_category {
-                        0 => enhancement.enhanced_range = !enhancement.enhanced_range,
-                        1 => enhancement.enhanced_duration = !enhancement.enhanced_duration,
-                        2 => enhancement.enhanced_damage = !enhancement.enhanced_damage,
-                        3 => enhancement.enhanced_save_modifier = !enhancement.enhanced_save_modifier,
-                        4 => enhancement.enhanced_success_chance = !enhancement.enhanced_success_chance,
-                        _ => {}
-                    }
-                    enhancement.pumps = [enhancement.enhanced_range, enhancement.enhanced_duration, 
-                                       enhancement.enhanced_damage, enhancement.enhanced_save_modifier,
-                                       enhancement.enhanced_success_chance].iter().filter(|&&x| x).count() as u8;
-                    enhancement.total_cost = spell.cost + (spell.additional_spell_points * enhancement.pumps);
-            }
-        }
-    }
-    
-    fn cast_selected_spell(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, enhanced: bool) -> anyhow::Result<()> {
-        if let Some((spell_name, spell)) = tactical_combat_state.available_spells.get(tactical_combat_state.selected_spell_index) {
-            let final_spell = if enhanced {
-                // Apply enhancements to the spell
-                self.apply_spell_enhancements(spell.clone(), &tactical_combat_state.current_enhancement)
-            } else {
-                spell.clone()
-            };
-            
-            tactical_combat_state.targeting_spell = Some(final_spell.clone());
-            tactical_combat_state.spell_menu_open = false;
-            tactical_combat_state.enhancement_menu_open = false;
-            tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalTargeting;
-            
-            // Calculate valid targets for this spell
-            let current_participant_id = tactical_combat_state.current_participant_index;
-            if let Some(caster_pos) = tactical_combat_state.battlefield.get_participant_position(current_participant_id) {
-                tactical_combat_state.valid_spell_targets = tactical_combat_state.battlefield.get_valid_spell_targets(
-                    &caster_pos,
-                    &final_spell,
-                    &tactical_combat_state.participants,
-                    current_participant_id
-                );
-                
-                if !tactical_combat_state.valid_spell_targets.is_empty() {
-                    // Set cursor to first valid target
-                    tactical_combat_state.cursor_position = tactical_combat_state.valid_spell_targets[0];
-                }
-            }
-            
-            let final_cost = if enhanced {
-                tactical_combat_state.current_enhancement.total_cost
-            } else {
-                spell.cost
-            };
-            
-            tactical_combat_state.selected_action = Some(crate::forge::TacticalCombatAction::CastSpell {
-                spell_name: format!("{}{}", spell_name, if enhanced { " (Enhanced)" } else { "" }),
-                target_position: None,
-                target_id: None,
-            });
-            
-            // Log enhancement details if applicable
-            if enhanced && tactical_combat_state.current_enhancement.pumps > 0 {
-                tactical_combat_state.combat_log.push(format!(
-                    "Enhanced {} with {} pump(s) for {} SP total", 
-                    spell_name, 
-                    tactical_combat_state.current_enhancement.pumps,
-                    final_cost
-                ));
-            }
-        }
-        Ok(())
-    }
-    
-    fn apply_spell_enhancements(&self, mut spell: crate::forge::magic::Spell, enhancement: &crate::forge::magic::SpellEnhancement) -> crate::forge::magic::Spell {
-        // Update spell cost
-        spell.cost = enhancement.total_cost;
-        
-        // Apply school-specific bonuses based on enhancements
-        // This would modify the spell's effects based on the enhancement flags
-        // For now, we'll just update the description to indicate enhancement
-        if enhancement.pumps > 0 {
-            spell.description = format!("{} (Enhanced with {} pump{})", 
-                spell.description, 
-                enhancement.pumps,
-                if enhancement.pumps == 1 { "" } else { "s" }
-            );
-        }
-        
-        spell
-    }
-    
-    fn execute_tactical_spell(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, 
-                              spell_name: String, _target_position: Option<crate::forge::BattlefieldPosition>, 
-                              target_id: Option<usize>) -> anyhow::Result<()> {
-        let all_spells = crate::forge::magic::create_starter_spells();
-        
-        if let Some(spell) = all_spells.get(&spell_name) {
-            if let Some(character) = &mut self.current_character {
-                if character.magic.spend_spell_points(spell.cost) {
-                    tactical_combat_state.combat_log.push(format!("✨ {} casts {}!", character.name, spell_name));
-                    
-                    // Convert to Forge spell target format and execute
-                    let forge_target = if let Some(id) = target_id {
-                        crate::ui::ForgeSpellTarget::Participant(id)
-                    } else {
-                        crate::ui::ForgeSpellTarget::Self_
-                    };
-                    
-                    self.execute_forge_spell_effect(tactical_combat_state, tactical_combat_state.current_participant_index, spell, &forge_target);
-                } else {
-                    tactical_combat_state.combat_log.push("Not enough spell points!".to_string());
-                }
-            }
-        }
-        
-        Ok(())
-    }
-    
-    // Populate spell menu for Forge combat
-    fn populate_forge_spell_menu(&mut self, tactical_combat: &mut crate::ui::TacticalCombatState) {
-        tactical_combat.available_spells.clear();
-        tactical_combat.spell_menu_open = true;
-        tactical_combat.selected_spell_index = 0;
-        
-        // Get all spells the character knows
-        let all_spells = crate::forge::magic::create_starter_spells();
-        
-        if let Some(character) = &self.current_character {
-            for (_school, spell_names) in &character.magic.known_spells {
-                for spell_name in spell_names {
-                    if let Some(spell) = all_spells.get(spell_name) {
-                        // Check if character has enough spell points
-                        if character.magic.can_cast_spell(spell) {
-                            tactical_combat.available_spells.push((spell_name.clone(), spell.clone()));
-                        }
-                    }
-                }
-            }
-            
-            // If no known spells, add some default basic spells based on the character's magic schools
-            if tactical_combat.available_spells.is_empty() {
-                for (school, skill_level) in &character.magic.school_skills {
-                    if *skill_level > 0 {
-                        match school {
-                            crate::forge::magic::MagicSchool::Elemental => {
-                                if let Some(spell) = all_spells.get("Fire Bolt") {
-                                    if character.magic.can_cast_spell(spell) {
-                                        tactical_combat.available_spells.push(("Fire Bolt".to_string(), spell.clone()));
-                                    }
-                                }
-                            }
-                            crate::forge::magic::MagicSchool::Divine => {
-                                if let Some(spell) = all_spells.get("Heal Wounds") {
-                                    if character.magic.can_cast_spell(spell) {
-                                        tactical_combat.available_spells.push(("Heal Wounds".to_string(), spell.clone()));
-                                    }
-                                }
-                            }
-                            crate::forge::magic::MagicSchool::Necromancer => {
-                                if let Some(spell) = all_spells.get("Drain Life") {
-                                    if character.magic.can_cast_spell(spell) {
-                                        tactical_combat.available_spells.push(("Drain Life".to_string(), spell.clone()));
-                                    }
-                                }
-                            }
-                            crate::forge::magic::MagicSchool::Beast => {
-                                if let Some(spell) = all_spells.get("Bear Strength") {
-                                    if character.magic.can_cast_spell(spell) {
-                                        tactical_combat.available_spells.push(("Bear Strength".to_string(), spell.clone()));
-                                    }
-                                }
-                            }
-                            crate::forge::magic::MagicSchool::Enchantment => {
-                                if let Some(spell) = all_spells.get("Weapon Blessing") {
-                                    if character.magic.can_cast_spell(spell) {
-                                        tactical_combat.available_spells.push(("Weapon Blessing".to_string(), spell.clone()));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        if tactical_combat.available_spells.is_empty() {
-            tactical_combat.combat_log.push("No spells available to cast!".to_string());
-            tactical_combat.spell_menu_open = false;
-            tactical_combat.combat_phase = crate::ui::CombatPhase::ForgeActionDeclaration;
-        }
-    }
-    
-    // Helper functions for Forge action targeting
-    fn find_closest_enemy(&self, tactical_combat: &crate::ui::TacticalCombatState) -> Option<usize> {
-        let current_participant = tactical_combat.current_participant_index;
-        if let Some(current) = tactical_combat.participants.get(current_participant) {
-            let is_player = current.base_participant.is_player;
-            let current_pos = current.position;
-            
-            tactical_combat.participants
-                .iter()
-                .enumerate()
-                .filter(|(i, p)| *i != current_participant && p.base_participant.is_player != is_player && p.base_participant.is_alive())
-                .min_by_key(|(_, p)| {
-                    current_pos.manhattan_distance_to(&p.position)
-                })
-                .map(|(i, _)| i)
-        } else {
-            None
-        }
-    }
-    
-    fn find_any_enemy(&self, tactical_combat: &crate::ui::TacticalCombatState) -> Option<usize> {
-        let current_participant = tactical_combat.current_participant_index;
-        if let Some(current) = tactical_combat.participants.get(current_participant) {
-            let is_player = current.base_participant.is_player;
-            
-            tactical_combat.participants
-                .iter()
-                .enumerate()
-                .find(|(i, p)| *i != current_participant && p.base_participant.is_player != is_player && p.base_participant.is_alive())
-                .map(|(i, _)| i)
-        } else {
-            None
-        }
-    }
-    
-    // Enhanced AI Helper Functions
-    fn move_ai_to_position(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, 
-                          ai_index: usize, new_pos: crate::forge::BattlefieldPosition, 
-                          action_description: &str) -> anyhow::Result<()> {
-        if let Some(ai_participant) = tactical_combat_state.participants.get(ai_index) {
-            let ai_name = ai_participant.base_participant.name.clone();
-            
-            tactical_combat_state.battlefield.move_participant(ai_index, new_pos).map_err(|e| anyhow::anyhow!(e))?;
-            if let Some(ai_participant) = tactical_combat_state.participants.get_mut(ai_index) {
-                ai_participant.position = new_pos;
-                tactical_combat_state.combat_log.push(format!("{} {}", ai_name, action_description));
-            }
-        }
-        Ok(())
-    }
-    
-    fn find_nearest_enemy_position(&self, tactical_combat_state: &crate::ui::TacticalCombatState, 
-                                  ai_index: usize) -> Option<crate::forge::BattlefieldPosition> {
-        if let Some(ai_participant) = tactical_combat_state.participants.get(ai_index) {
-            let ai_pos = ai_participant.position;
-            
-            tactical_combat_state.participants
-                .iter()
-                .enumerate()
-                .filter(|(i, p)| *i != ai_index && p.base_participant.is_player && p.base_participant.is_alive())
-                .min_by_key(|(_, p)| ai_pos.manhattan_distance_to(&p.position))
-                .map(|(_, p)| p.position)
-        } else {
-            None
-        }
-    }
-    
-    fn find_direct_approach_position(&self, from: crate::forge::BattlefieldPosition, 
-                                   to: crate::forge::BattlefieldPosition, 
-                                   movement_speed: u32,
-                                   battlefield: &crate::forge::TacticalBattlefield) -> Option<crate::forge::BattlefieldPosition> {
-        let dx = (to.x - from.x).signum();
-        let dy = (to.y - from.y).signum();
-        
-        for step in 1..=movement_speed {
-            let new_pos = crate::forge::BattlefieldPosition::new(
-                from.x + dx * step as i32,
-                from.y + dy * step as i32
-            );
-            
-            if battlefield.is_position_passable(&new_pos) {
-                // Return the furthest valid position in the direction of the target
-                continue;
-            } else {
-                // Hit an obstacle, return the last valid position
-                if step > 1 {
-                    return Some(crate::forge::BattlefieldPosition::new(
-                        from.x + dx * (step - 1) as i32,
-                        from.y + dy * (step - 1) as i32
-                    ));
-                } else {
-                    break;
-                }
-            }
-        }
-        
-        // Return the furthest position we can move
-        let final_pos = crate::forge::BattlefieldPosition::new(
-            from.x + dx * movement_speed as i32,
-            from.y + dy * movement_speed as i32
-        );
-        
-        if battlefield.is_position_passable(&final_pos) {
-            Some(final_pos)
-        } else {
-            None
-        }
-    }
-    
-    fn find_flee_position(&self, tactical_combat_state: &crate::ui::TacticalCombatState, 
-                         ai_index: usize, movement_speed: u32) -> Option<crate::forge::BattlefieldPosition> {
-        if let Some(ai_participant) = tactical_combat_state.participants.get(ai_index) {
-            let ai_pos = ai_participant.position;
-            
-            // Find the average position of all enemies
-            let enemies: Vec<_> = tactical_combat_state.participants
-                .iter()
-                .filter(|p| p.base_participant.is_player && p.base_participant.is_alive())
-                .collect();
-                
-            if enemies.is_empty() {
-                return None;
-            }
-            
-            let avg_enemy_x = enemies.iter().map(|e| e.position.x).sum::<i32>() / enemies.len() as i32;
-            let avg_enemy_y = enemies.iter().map(|e| e.position.y).sum::<i32>() / enemies.len() as i32;
-            
-            // Move in the opposite direction
-            let flee_direction_x = (ai_pos.x - avg_enemy_x).signum();
-            let flee_direction_y = (ai_pos.y - avg_enemy_y).signum();
-            
-            let flee_pos = crate::forge::BattlefieldPosition::new(
-                ai_pos.x + flee_direction_x * movement_speed as i32,
-                ai_pos.y + flee_direction_y * movement_speed as i32
-            );
-            
-            if tactical_combat_state.battlefield.is_position_passable(&flee_pos) {
-                Some(flee_pos)
-            } else {
-                // Try alternative flee directions
-                for &(dx, dy) in &[(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)] {
-                    let alt_pos = crate::forge::BattlefieldPosition::new(
-                        ai_pos.x + dx * movement_speed as i32,
-                        ai_pos.y + dy * movement_speed as i32
-                    );
-                    if tactical_combat_state.battlefield.is_position_passable(&alt_pos) {
-                        return Some(alt_pos);
-                    }
-                }
-                None
-            }
-        } else {
-            None
-        }
-    }
-    
-    fn find_defensive_position(&self, tactical_combat_state: &crate::ui::TacticalCombatState, 
-                              ai_index: usize, movement_speed: u32) -> Option<crate::forge::BattlefieldPosition> {
-        if let Some(ai_participant) = tactical_combat_state.participants.get(ai_index) {
-            let ai_pos = ai_participant.position;
-            let mut best_pos = ai_pos;
-            let mut best_score = 0i32;
-            
-            // Search for positions with good cover bonuses
-            for x in (ai_pos.x - movement_speed as i32)..=(ai_pos.x + movement_speed as i32) {
-                for y in (ai_pos.y - movement_speed as i32)..=(ai_pos.y + movement_speed as i32) {
-                    let candidate_pos = crate::forge::BattlefieldPosition::new(x, y);
-                    
-                    if tactical_combat_state.battlefield.is_position_passable(&candidate_pos) {
-                        let distance_cost = ai_pos.manhattan_distance_to(&candidate_pos) as u32;
-                        if distance_cost <= movement_speed {
-                            let cover_bonus = tactical_combat_state.battlefield.get_cover_bonus(&candidate_pos) as i32;
-                            
-                            // Score based on cover and distance from enemies
-                            let mut score = cover_bonus * 10;
-                            
-                            // Add points for being farther from enemies
-                            for participant in &tactical_combat_state.participants {
-                                if participant.base_participant.is_player && participant.base_participant.is_alive() {
-                                    let enemy_distance = candidate_pos.manhattan_distance_to(&participant.position);
-                                    score += enemy_distance.min(5) * 2; // Cap the benefit
-                                }
-                            }
-                            
-                            if score > best_score {
-                                best_score = score;
-                                best_pos = candidate_pos;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            if best_pos != ai_pos {
-                Some(best_pos)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-    
-    fn find_cautious_approach_position(&self, tactical_combat_state: &crate::ui::TacticalCombatState, 
-                                      ai_index: usize, movement_speed: u32) -> Option<crate::forge::BattlefieldPosition> {
-        // Move toward enemies but prioritize safety
-        if let Some(target_pos) = self.find_nearest_enemy_position(tactical_combat_state, ai_index) {
-            if let Some(ai_participant) = tactical_combat_state.participants.get(ai_index) {
-                let ai_pos = ai_participant.position;
-                
-                // Move only 1-2 tiles at a time, even if movement speed is higher
-                let cautious_speed = (movement_speed / 2).max(1).min(2);
-                self.find_direct_approach_position(ai_pos, target_pos, cautious_speed, &tactical_combat_state.battlefield)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-    
-    fn find_tactical_approach_position(&self, from: crate::forge::BattlefieldPosition, 
-                                      to: crate::forge::BattlefieldPosition, 
-                                      movement_speed: u32,
-                                      battlefield: &crate::forge::TacticalBattlefield) -> Option<crate::forge::BattlefieldPosition> {
-        // Try to approach while maintaining line of sight and avoiding obvious traps
-        let mut best_pos = from;
-        let mut best_score = 0i32;
-        
-        for x in (from.x - movement_speed as i32)..=(from.x + movement_speed as i32) {
-            for y in (from.y - movement_speed as i32)..=(from.y + movement_speed as i32) {
-                let candidate_pos = crate::forge::BattlefieldPosition::new(x, y);
-                
-                if battlefield.is_position_passable(&candidate_pos) {
-                    let distance_cost = from.manhattan_distance_to(&candidate_pos) as u32;
-                    if distance_cost <= movement_speed {
-                        let mut score = 0i32;
-                        
-                        // Prefer positions that get us closer to target
-                        let old_distance = from.manhattan_distance_to(&to);
-                        let new_distance = candidate_pos.manhattan_distance_to(&to);
-                        if new_distance < old_distance {
-                            score += (old_distance - new_distance) * 5;
-                        }
-                        
-                        // Bonus for cover
-                        score += battlefield.get_cover_bonus(&candidate_pos) as i32 * 3;
-                        
-                        // Bonus for line of sight to target
-                        if battlefield.has_line_of_sight(&candidate_pos, &to) {
-                            score += 5;
-                        }
-                        
-                        if score > best_score {
-                            best_score = score;
-                            best_pos = candidate_pos;
-                        }
-                    }
-                }
-            }
-        }
-        
-        if best_pos != from {
-            Some(best_pos)
-        } else {
-            None
-        }
-    }
-    
-    fn find_ranged_position(&self, from: crate::forge::BattlefieldPosition, 
-                           to: crate::forge::BattlefieldPosition, 
-                           movement_speed: u32,
-                           battlefield: &crate::forge::TacticalBattlefield) -> Option<crate::forge::BattlefieldPosition> {
-        // Try to maintain distance while getting line of sight
-        let mut best_pos = from;
-        let mut best_score = 0i32;
-        let optimal_distance = 3i32; // Prefer to be 3 tiles away
-        
-        for x in (from.x - movement_speed as i32)..=(from.x + movement_speed as i32) {
-            for y in (from.y - movement_speed as i32)..=(from.y + movement_speed as i32) {
-                let candidate_pos = crate::forge::BattlefieldPosition::new(x, y);
-                
-                if battlefield.is_position_passable(&candidate_pos) {
-                    let distance_cost = from.manhattan_distance_to(&candidate_pos) as u32;
-                    if distance_cost <= movement_speed {
-                        let target_distance = candidate_pos.manhattan_distance_to(&to);
-                        let mut score = 0i32;
-                        
-                        // Prefer optimal range
-                        let range_diff = (target_distance - optimal_distance).abs();
-                        score += (5 - range_diff.min(5)) * 3;
-                        
-                        // Bonus for cover
-                        score += battlefield.get_cover_bonus(&candidate_pos) as i32 * 5;
-                        
-                        // Bonus for line of sight
-                        if battlefield.has_line_of_sight(&candidate_pos, &to) {
-                            score += 8;
-                        }
-                        
-                        if score > best_score {
-                            best_score = score;
-                            best_pos = candidate_pos;
-                        }
-                    }
-                }
-            }
-        }
-        
-        if best_pos != from {
-            Some(best_pos)
-        } else {
-            None
-        }
-    }
-    
-    fn find_balanced_approach_position(&self, from: crate::forge::BattlefieldPosition, 
-                                      to: crate::forge::BattlefieldPosition, 
-                                      movement_speed: u32,
-                                      battlefield: &crate::forge::TacticalBattlefield) -> Option<crate::forge::BattlefieldPosition> {
-        // Balanced approach: move toward target but consider terrain
-        let conservative_speed = (movement_speed * 2 / 3).max(1);
-        self.find_tactical_approach_position(from, to, conservative_speed, battlefield)
-    }
-    
-    // Enhanced Forge Combat AI Helper Functions
-    fn find_forge_best_target(&self, tactical_combat: &crate::ui::TacticalCombatState, 
-                             ai_index: usize, personality: &crate::forge::AIPersonality) -> Option<usize> {
-        let targets: Vec<_> = tactical_combat.participants
-            .iter()
-            .enumerate()
-            .filter(|(i, p)| *i != ai_index && p.base_participant.is_player && p.base_participant.is_alive())
-            .collect();
-        
-        if targets.is_empty() {
-            return None;
-        }
-        
-        match personality.behavior_type {
-            crate::forge::AIBehaviorType::Tactical => {
-                // Target based on threat level and vulnerability
-                targets.iter()
-                    .min_by_key(|(_, p)| {
-                        let threat = p.base_participant.get_total_attack_value() as i32;
-                        let health = p.base_participant.get_health_percentage() as i32;
-                        let defense = p.base_participant.get_total_defense_value() as i32;
-                        
-                        // Score: higher threat + lower health - defense = better target
-                        (health + defense) - (threat * 2)
-                    })
-                    .map(|(i, _)| *i)
-            }
-            crate::forge::AIBehaviorType::Aggressive | crate::forge::AIBehaviorType::Berserker => {
-                // Target the strongest or closest enemy
-                self.find_closest_enemy(tactical_combat)
-            }
-            crate::forge::AIBehaviorType::Coward | crate::forge::AIBehaviorType::Defensive => {
-                // Target the weakest enemy
-                self.find_weakest_forge_target(tactical_combat, ai_index)
-            }
-            _ => {
-                // Balanced: prefer wounded targets
-                targets.iter()
-                    .min_by_key(|(_, p)| p.base_participant.get_health_percentage())
-                    .map(|(i, _)| *i)
-            }
-        }
-    }
-    
-    fn find_weakest_forge_target(&self, tactical_combat: &crate::ui::TacticalCombatState, ai_index: usize) -> Option<usize> {
-        tactical_combat.participants
-            .iter()
-            .enumerate()
-            .filter(|(i, p)| *i != ai_index && p.base_participant.is_player && p.base_participant.is_alive())
-            .min_by_key(|(_, p)| p.base_participant.combat_stats.hit_points.current)
-            .map(|(i, _)| i)
-    }
-    
-    fn choose_attack_type(&self, tactical_combat: &crate::ui::TacticalCombatState, 
-                         ai_index: usize, target_id: usize, force_melee: bool) -> crate::ui::ForgeAction {
-        let ai_participant = &tactical_combat.participants[ai_index];
-        let target_pos = tactical_combat.participants[target_id].position;
-        let current_pos = ai_participant.position;
-        let distance = current_pos.manhattan_distance_to(&target_pos);
-        let weapon = ai_participant.base_participant.weapon.clone();
-        
-        if force_melee || distance <= 2 {
-            crate::ui::ForgeAction::MeleeAttack { target_id, weapon }
-        } else {
-            crate::ui::ForgeAction::MissileAttack { target_id, weapon, position: target_pos }
-        }
-    }
-    
-    fn choose_tactical_attack(&self, tactical_combat: &crate::ui::TacticalCombatState, 
-                            ai_index: usize, target_id: usize, personality: &crate::forge::AIPersonality) -> crate::ui::ForgeAction {
-        let ai_participant = &tactical_combat.participants[ai_index];
-        let target_pos = tactical_combat.participants[target_id].position;
-        let current_pos = ai_participant.position;
-        let distance = current_pos.manhattan_distance_to(&target_pos);
-        
-        // Consider spell casting first if high spell preference
-        if personality.spell_preference >= 6 {
-            let spell = self.create_ai_spell(personality);
-            let target_type = crate::ui::ForgeSpellTarget::Participant(target_id);
-            return crate::ui::ForgeAction::CastSpell { 
-                spell,
-                target_type
-            };
-        }
-        
-        // Choose attack type based on range preferences
-        if personality.ranged_preference >= 6 && distance > 1 {
-            let weapon = ai_participant.base_participant.weapon.clone();
-            crate::ui::ForgeAction::MissileAttack { target_id, weapon, position: target_pos }
-        } else if distance <= 2 {
-            let weapon = ai_participant.base_participant.weapon.clone();
-            crate::ui::ForgeAction::MeleeAttack { target_id, weapon }
-        } else {
-            // Default to missile attack at range
-            let weapon = ai_participant.base_participant.weapon.clone();
-            crate::ui::ForgeAction::MissileAttack { target_id, weapon, position: target_pos }
-        }
-    }
-    
-    fn create_ai_spell(&self, personality: &crate::forge::AIPersonality) -> crate::forge::magic::Spell {
-        // Simple spell selection based on personality
-        match personality.behavior_type {
-            crate::forge::AIBehaviorType::Aggressive | crate::forge::AIBehaviorType::Berserker => {
-                crate::forge::magic::Spell {
-                    name: "Lightning Bolt".to_string(),
-                    school: crate::forge::magic::MagicSchool::Elemental,
-                    level: 2,
-                    cost: 5,
-                    target: crate::forge::magic::SpellTarget::SingleEnemy,
-                    effects: vec![crate::forge::magic::SpellEffect::Damage { 
-                        damage_type: crate::forge::DamageType::Magic,
-                        dice: "2d6".to_string(),
-                        bonus: 0
-                    }],
-                    description: "Hurls a bolt of lightning at an enemy".to_string(),
-                    success_chance_base: 75,
-                    backfire_chance: 10,
-                    tactical_info: Some(crate::forge::magic::TacticalSpellInfo {
-                        range: 5,
-                        requires_line_of_sight: true,
-                        affects_terrain: false,
-                        friendly_fire: false,
-                    }),
-                    additional_spell_points: 3,
-                    max_pumps: 1,
-                    component_break_chance: 30,
-                }
-            }
-            crate::forge::AIBehaviorType::Defensive => {
-                crate::forge::magic::Spell {
-                    name: "Shield".to_string(),
-                    school: crate::forge::magic::MagicSchool::Enchantment,
-                    level: 1,
-                    cost: 3,
-                    target: crate::forge::magic::SpellTarget::Self_,
-                    effects: vec![crate::forge::magic::SpellEffect::Buff { 
-                        stat: "defense".to_string(),
-                        modifier: 2,
-                        duration: 10
-                    }],
-                    description: "Creates a magical shield that improves defense".to_string(),
-                    success_chance_base: 85,
-                    backfire_chance: 5,
-                    tactical_info: Some(crate::forge::magic::TacticalSpellInfo {
-                        range: 0,
-                        requires_line_of_sight: false,
-                        affects_terrain: false,
-                        friendly_fire: false,
-                    }),
-                    additional_spell_points: 2,
-                    max_pumps: 1,
-                    component_break_chance: 20,
-                }
-            }
-            crate::forge::AIBehaviorType::Support => {
-                crate::forge::magic::Spell {
-                    name: "Heal".to_string(),
-                    school: crate::forge::magic::MagicSchool::Divine,
-                    level: 1,
-                    cost: 4,
-                    target: crate::forge::magic::SpellTarget::SingleAlly,
-                    effects: vec![crate::forge::magic::SpellEffect::Heal { 
-                        dice: "1d8".to_string(),
-                        bonus: 2
-                    }],
-                    description: "Restores health to an ally".to_string(),
-                    success_chance_base: 80,
-                    backfire_chance: 5,
-                    tactical_info: Some(crate::forge::magic::TacticalSpellInfo {
-                        range: 3,
-                        requires_line_of_sight: true,
-                        affects_terrain: false,
-                        friendly_fire: false,
-                    }),
-                    additional_spell_points: 2,
-                    max_pumps: 1,
-                    component_break_chance: 15,
-                }
-            }
-            _ => {
-                crate::forge::magic::Spell {
-                    name: "Magic Missile".to_string(),
-                    school: crate::forge::magic::MagicSchool::Elemental,
-                    level: 1,
-                    cost: 2,
-                    target: crate::forge::magic::SpellTarget::SingleEnemy,
-                    effects: vec![crate::forge::magic::SpellEffect::Damage { 
-                        damage_type: crate::forge::DamageType::Magic,
-                        dice: "1d4".to_string(),
-                        bonus: 1
-                    }],
-                    description: "A basic magical projectile".to_string(),
-                    success_chance_base: 85,
-                    backfire_chance: 5,
-                    tactical_info: Some(crate::forge::magic::TacticalSpellInfo {
-                        range: 4,
-                        requires_line_of_sight: true,
-                        affects_terrain: false,
-                        friendly_fire: false,
-                    }),
-                    additional_spell_points: 1,
-                    max_pumps: 1,
-                    component_break_chance: 10,
-                }
-            }
-        }
-    }
-    
-    fn find_best_retreat_direction(&self, tactical_combat: &crate::ui::TacticalCombatState, ai_index: usize) -> crate::forge::BattlefieldPosition {
-        let ai_pos = tactical_combat.participants[ai_index].position;
-        
-        // Find average enemy position
-        let enemies: Vec<_> = tactical_combat.participants
-            .iter()
-            .filter(|p| p.base_participant.is_player && p.base_participant.is_alive())
-            .collect();
-        
-        if enemies.is_empty() {
-            return ai_pos; // No enemies, no need to retreat
-        }
-        
-        let avg_enemy_x = enemies.iter().map(|e| e.position.x).sum::<i32>() / enemies.len() as i32;
-        let avg_enemy_y = enemies.iter().map(|e| e.position.y).sum::<i32>() / enemies.len() as i32;
-        
-        // Retreat in opposite direction
-        let retreat_x = if ai_pos.x > avg_enemy_x { ai_pos.x + 2 } else { ai_pos.x - 2 };
-        let retreat_y = if ai_pos.y > avg_enemy_y { ai_pos.y + 2 } else { ai_pos.y - 2 };
-        
-        crate::forge::BattlefieldPosition::new(retreat_x, retreat_y)
-    }
-    
-    fn execute_movement_action(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, action_index: usize) -> anyhow::Result<()> {
-        match action_index {
-            0 => { // Move Only
-                tactical_combat_state.combat_log.push("Move Only selected - position without attacking".to_string());
-                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-            }
-            1 => { // Move + Attack
-                tactical_combat_state.combat_log.push("Move + Attack selected - move then attack".to_string());
-                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-            }
-            2 => { // Charge
-                tactical_combat_state.combat_log.push("Charge selected - rush attack with bonus damage".to_string());
-                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-            }
-            3 => { // Sprint
-                tactical_combat_state.combat_log.push("Sprint selected - double movement speed".to_string());
-                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-            }
-            4 => { // Tactical Retreat
-                tactical_combat_state.combat_log.push("Tactical Retreat selected - defensive movement".to_string());
-                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-            }
-            _ => {}
-        }
-        self.state = crate::ui::UIState::TacticalCombat(tactical_combat_state.clone());
-        Ok(())
-    }
-    
-    fn execute_combat_action(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, action_index: usize) -> anyhow::Result<()> {
-        match action_index {
-            0 => { // Attack
-                tactical_combat_state.combat_log.push("Attack selected - choose target".to_string());
-                tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                tactical_combat_state.action_menu_open = true;
-                tactical_combat_state.selected_action_index = 1; // Attack option
-                self.populate_available_actions(tactical_combat_state);
-            }
-            1 => { // Defend
-                tactical_combat_state.combat_log.push("Defend selected - +2 defensive bonus".to_string());
-                self.execute_end_turn(tactical_combat_state)?;
-            }
-            2 => { // Grapple
-                tactical_combat_state.combat_log.push("Grapple selected - attempt to restrain target".to_string());
-                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-            }
-            3 => { // Ready Item
-                tactical_combat_state.combat_log.push("Ready Item selected - prepare item for use".to_string());
-                tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                tactical_combat_state.action_menu_open = true;
-                tactical_combat_state.selected_action_index = 3; // Use Item option
-                self.populate_available_actions(tactical_combat_state);
-            }
-            4 => { // Switch Weapon
-                tactical_combat_state.combat_log.push("Switch Weapon selected - change equipped weapon".to_string());
-                tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                tactical_combat_state.action_menu_open = true;
-                tactical_combat_state.selected_action_index = 4; // Switch Weapon option
-                self.populate_available_actions(tactical_combat_state);
-            }
-            _ => {}
-        }
-        self.state = crate::ui::UIState::TacticalCombat(tactical_combat_state.clone());
-        Ok(())
-    }
-    
-    fn execute_skills_action(&mut self, tactical_combat_state: &mut crate::ui::TacticalCombatState, action_index: usize) -> anyhow::Result<()> {
-        match action_index {
-            0 => { // Cast Spell
-                tactical_combat_state.combat_log.push("Cast Spell selected - choose spell".to_string());
-                tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                tactical_combat_state.spell_menu_open = true;
-                tactical_combat_state.action_menu_open = false;
-                let _ = self.populate_available_spells(tactical_combat_state);
-            }
-            1 => { // Perception Check
-                tactical_combat_state.combat_log.push("Perception Check - scanning for hidden threats...".to_string());
-                tactical_combat_state.combat_log.push("No hidden enemies detected.".to_string());
-                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-            }
-            2 => { // Tactical Analysis
-                tactical_combat_state.combat_log.push("Tactical Analysis - studying battlefield...".to_string());
-                tactical_combat_state.combat_log.push("Advantage points identified on elevated terrain.".to_string());
-                tactical_combat_state.active_panel = crate::ui::CombatPanel::Battlefield;
-            }
-            3 => { // Use Item
-                tactical_combat_state.combat_log.push("Use Item selected - choose item".to_string());
-                tactical_combat_state.combat_phase = crate::ui::CombatPhase::TacticalActionSelection;
-                tactical_combat_state.action_menu_open = true;
-                tactical_combat_state.selected_action_index = 3; // Use Item option
-                self.populate_available_actions(tactical_combat_state);
-            }
-            4 => { // End Turn
-                tactical_combat_state.combat_log.push("Turn ended voluntarily".to_string());
-                self.execute_end_turn(tactical_combat_state)?;
-            }
-            _ => {}
-        }
-        self.state = crate::ui::UIState::TacticalCombat(tactical_combat_state.clone());
-        Ok(())
-    }
 }
