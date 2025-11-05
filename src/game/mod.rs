@@ -5307,15 +5307,29 @@ impl Game {
                         damage_bonus = attacker.base_participant.combat_stats.damage_bonus;
                     }
 
+                    // Apply defensive stance bonus (+4 DV)
+                    let is_defending = tactical_state.defending_participants.contains(&target_idx);
+                    let final_defensive_value = if is_defending {
+                        defensive_value + 4
+                    } else {
+                        defensive_value
+                    };
+
                     // Roll attack
                     let mut rng = rand::thread_rng();
                     let attack_roll = rng.gen_range(1..=20);
                     let total_attack = attack_roll + attack_value as i32;
 
-                    tactical_state.add_log(format!("{} attacks {}! (Roll: {}, Total: {})",
-                        attacker_name, defender_name, attack_roll, total_attack));
+                    let defense_note = if is_defending {
+                        format!(" (DV: {} +4 defensive stance)", defensive_value)
+                    } else {
+                        "".to_string()
+                    };
 
-                    if total_attack >= defensive_value as i32 {
+                    tactical_state.add_log(format!("{} attacks {}! (Roll: {}, Total: {}){}",
+                        attacker_name, defender_name, attack_roll, total_attack, defense_note));
+
+                    if total_attack >= final_defensive_value as i32 {
                         // Hit! Calculate damage
                         // For now, use a simple d8 for weapons, d4 for unarmed
                         let base_damage = if has_weapon {
@@ -5341,7 +5355,7 @@ impl Game {
                             tactical_state.add_log(format!("{} has been defeated!", defender_name));
                         }
                     } else {
-                        tactical_state.add_log(format!("MISS! (Needed {} to hit)", defensive_value));
+                        tactical_state.add_log(format!("MISS! (Needed {} to hit)", final_defensive_value));
                     }
 
                     // Check for victory/defeat conditions
@@ -5423,7 +5437,13 @@ impl Game {
             Some(crate::ui::PendingAction::Defend) => {
                 let current_idx = tactical_state.initiative_order[tactical_state.current_turn_index].0;
                 let participant_name = tactical_state.participants[current_idx].base_participant.name.clone();
-                tactical_state.add_log(format!("{} takes a defensive stance!", participant_name));
+
+                // Add to defending participants list (gives +4 DV until next round)
+                if !tactical_state.defending_participants.contains(&current_idx) {
+                    tactical_state.defending_participants.push(current_idx);
+                }
+
+                tactical_state.add_log(format!("{} takes a defensive stance! (+4 DV until next round)", participant_name));
 
                 // Clear pending action and advance turn
                 tactical_state.pending_action = None;
@@ -5496,6 +5516,9 @@ impl Game {
         if tactical_state.current_turn_index == 0 {
             tactical_state.round_number += 1;
             tactical_state.add_log(format!("=== ROUND {} ===", tactical_state.round_number));
+
+            // Clear defensive stances at start of new round
+            tactical_state.defending_participants.clear();
         }
 
         // Log whose turn it is
@@ -5626,15 +5649,29 @@ impl Game {
             damage_bonus = attacker.base_participant.combat_stats.damage_bonus;
         }
 
+        // Apply defensive stance bonus (+4 DV)
+        let is_defending = tactical_state.defending_participants.contains(&target_idx);
+        let final_defensive_value = if is_defending {
+            defensive_value + 4
+        } else {
+            defensive_value
+        };
+
         // Roll attack
         let mut rng = rand::thread_rng();
         let attack_roll = rng.gen_range(1..=20);
         let total_attack = attack_roll + attack_value as i32;
 
-        tactical_state.add_log(format!("{} attacks {}! (Roll: {}, Total: {})",
-            attacker_name, defender_name, attack_roll, total_attack));
+        let defense_note = if is_defending {
+            format!(" (DV: {} +4 defensive stance)", defensive_value)
+        } else {
+            "".to_string()
+        };
 
-        if total_attack >= defensive_value as i32 {
+        tactical_state.add_log(format!("{} attacks {}! (Roll: {}, Total: {}){}",
+            attacker_name, defender_name, attack_roll, total_attack, defense_note));
+
+        if total_attack >= final_defensive_value as i32 {
             // Hit! Calculate damage
             let base_damage = if has_weapon { 8 } else { 4 }; // d8 or d4
             let damage_roll = rng.gen_range(1..=base_damage);
@@ -5657,7 +5694,7 @@ impl Game {
                 // This is handled in process_ai_turns_until_player which checks before each turn
             }
         } else {
-            tactical_state.add_log(format!("MISS! (Needed {} to hit)", defensive_value));
+            tactical_state.add_log(format!("MISS! (Needed {} to hit)", final_defensive_value));
         }
     }
 

@@ -147,6 +147,9 @@ pub struct TacticalCombatState {
     pub pending_action: Option<PendingAction>,
     pub available_targets: Vec<usize>, // Indices of valid targets for current action
 
+    // Defensive stance tracking
+    pub defending_participants: Vec<usize>, // Indices of participants in defensive stance this round
+
     // Return state
     pub return_to_dungeon: Option<DungeonExplorationState>,
 }
@@ -372,6 +375,7 @@ impl TacticalCombatState {
             log_scroll_offset: 0,
             pending_action: None,
             available_targets: Vec::new(),
+            defending_participants: Vec::new(),
             return_to_dungeon,
         }
     }
