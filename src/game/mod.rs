@@ -5351,38 +5351,54 @@ impl Game {
                 let cursor_pos = tactical_state.cursor_pos;
                 let current_idx = tactical_state.initiative_order[tactical_state.current_turn_index].0;
 
-                // Check if position is valid (not occupied, within movement range, etc.)
-                let occupied = tactical_state.participants.iter().enumerate().any(|(idx, _)| {
-                    if idx == current_idx {
-                        return false;
-                    }
-                    tactical_state.battlefield.participant_positions.get(&idx)
-                        .map(|pos| pos.x == cursor_pos.0 && pos.y == cursor_pos.1)
-                        .unwrap_or(false)
-                });
+                // Get current position
+                let current_pos = tactical_state.battlefield.participant_positions.get(&current_idx).cloned();
 
-                if occupied {
-                    tactical_state.add_log("Position is occupied!".to_string());
-                } else {
-                    // Move participant
-                    let participant_name = tactical_state.participants[current_idx].base_participant.name.clone();
-                    let old_pos = tactical_state.battlefield.participant_positions.get(&current_idx).cloned();
-                    let new_pos = crate::forge::BattlefieldPosition::new(cursor_pos.0, cursor_pos.1);
+                if let Some(current_position) = current_pos {
+                    // Calculate distance (Manhattan distance)
+                    let dx = (cursor_pos.0 - current_position.x).abs();
+                    let dy = (cursor_pos.1 - current_position.y).abs();
+                    let distance = dx + dy;
 
-                    tactical_state.battlefield.participant_positions.insert(current_idx, new_pos);
-                    tactical_state.participants[current_idx].position = new_pos;
+                    // Define movement range (5 squares per turn)
+                    const MAX_MOVEMENT_RANGE: i32 = 5;
 
-                    if let Some(old_p) = old_pos {
-                        tactical_state.add_log(format!("{} moves from ({}, {}) to ({}, {})",
-                            participant_name, old_p.x, old_p.y, cursor_pos.0, cursor_pos.1));
+                    if distance > MAX_MOVEMENT_RANGE {
+                        tactical_state.add_log(format!("Too far! Maximum movement range is {} squares. (You tried to move {} squares)",
+                            MAX_MOVEMENT_RANGE, distance));
                     } else {
-                        tactical_state.add_log(format!("{} moves to ({}, {})",
-                            participant_name, cursor_pos.0, cursor_pos.1));
-                    }
+                        // Check if position is valid (not occupied, within battlefield bounds, etc.)
+                        let occupied = tactical_state.participants.iter().enumerate().any(|(idx, _)| {
+                            if idx == current_idx {
+                                return false;
+                            }
+                            tactical_state.battlefield.participant_positions.get(&idx)
+                                .map(|pos| pos.x == cursor_pos.0 && pos.y == cursor_pos.1)
+                                .unwrap_or(false)
+                        });
 
-                    // Clear pending action and advance turn
+                        if occupied {
+                            tactical_state.add_log("Position is occupied!".to_string());
+                        } else {
+                            // Move participant
+                            let participant_name = tactical_state.participants[current_idx].base_participant.name.clone();
+                            let new_pos = crate::forge::BattlefieldPosition::new(cursor_pos.0, cursor_pos.1);
+
+                            tactical_state.battlefield.participant_positions.insert(current_idx, new_pos);
+                            tactical_state.participants[current_idx].position = new_pos;
+
+                            tactical_state.add_log(format!("{} moves from ({}, {}) to ({}, {}) - {} square{}",
+                                participant_name, current_position.x, current_position.y, cursor_pos.0, cursor_pos.1,
+                                distance, if distance == 1 { "" } else { "s" }));
+
+                            // Clear pending action and advance turn
+                            tactical_state.pending_action = None;
+                            self.advance_turn(tactical_state);
+                        }
+                    }
+                } else {
+                    tactical_state.add_log("Error: Cannot determine current position!".to_string());
                     tactical_state.pending_action = None;
-                    self.advance_turn(tactical_state);
                 }
             }
 
@@ -5498,10 +5514,8 @@ impl Game {
                     // Execute attack on player
                     self.execute_ai_attack(tactical_state, current_idx, player_idx);
                 } else {
-                    // For now, AI just passes if not in range
-                    // TODO: Add AI movement in next iteration
-                    let ai_name = tactical_state.participants[current_idx].base_participant.name.clone();
-                    tactical_state.add_log(format!("{} is too far to attack (distance: {}) and passes.", ai_name, distance));
+                    // Move toward player
+                    self.execute_ai_movement(tactical_state, current_idx, ai_position, player_pos);
                 }
             }
         } else {
@@ -5573,6 +5587,73 @@ impl Game {
             }
         } else {
             tactical_state.add_log(format!("MISS! (Needed {} to hit)", defensive_value));
+        }
+    }
+
+    fn execute_ai_movement(&mut self, tactical_state: &mut crate::ui::TacticalCombatState, ai_idx: usize,
+                            ai_pos: crate::forge::BattlefieldPosition, target_pos: crate::forge::BattlefieldPosition) {
+        // Calculate direction to move toward target
+        let dx = target_pos.x - ai_pos.x;
+        let dy = target_pos.y - ai_pos.y;
+
+        // AI movement range (3 squares - slightly less than player's 5)
+        const AI_MOVEMENT_RANGE: i32 = 3;
+
+        // Calculate best move direction (prioritize closing distance)
+        let mut new_x = ai_pos.x;
+        let mut new_y = ai_pos.y;
+
+        // Move toward target, up to AI_MOVEMENT_RANGE squares
+        let mut moves_remaining = AI_MOVEMENT_RANGE;
+
+        // First, move horizontally toward target
+        while moves_remaining > 0 && new_x != target_pos.x {
+            if dx > 0 {
+                new_x += 1;
+            } else {
+                new_x -= 1;
+            }
+            moves_remaining -= 1;
+        }
+
+        // Then move vertically toward target
+        while moves_remaining > 0 && new_y != target_pos.y {
+            if dy > 0 {
+                new_y += 1;
+            } else {
+                new_y -= 1;
+            }
+            moves_remaining -= 1;
+        }
+
+        // Check if new position is valid (not occupied, within bounds)
+        let occupied = tactical_state.participants.iter().enumerate().any(|(idx, _)| {
+            if idx == ai_idx {
+                return false;
+            }
+            tactical_state.battlefield.participant_positions.get(&idx)
+                .map(|pos| pos.x == new_x && pos.y == new_y)
+                .unwrap_or(false)
+        });
+
+        if !occupied && new_x >= 0 && new_y >= 0 &&
+           new_x < tactical_state.battlefield.width as i32 &&
+           new_y < tactical_state.battlefield.height as i32 {
+            // Execute move
+            let ai_name = tactical_state.participants[ai_idx].base_participant.name.clone();
+            let distance_moved = (new_x - ai_pos.x).abs() + (new_y - ai_pos.y).abs();
+
+            let new_pos = crate::forge::BattlefieldPosition::new(new_x, new_y);
+            tactical_state.battlefield.participant_positions.insert(ai_idx, new_pos);
+            tactical_state.participants[ai_idx].position = new_pos;
+
+            tactical_state.add_log(format!("{} moves {} square{} toward target ({}, {}) → ({}, {})",
+                ai_name, distance_moved, if distance_moved == 1 { "" } else { "s" },
+                ai_pos.x, ai_pos.y, new_x, new_y));
+        } else {
+            // Can't move - position blocked or invalid
+            let ai_name = tactical_state.participants[ai_idx].base_participant.name.clone();
+            tactical_state.add_log(format!("{} cannot move (path blocked)", ai_name));
         }
     }
 
