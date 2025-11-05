@@ -11,3 +11,9 @@ dist/
 .npm
 .yarn-integrity
 .cache/
+
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
