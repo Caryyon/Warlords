@@ -1594,12 +1594,34 @@ impl Game {
             }
         }
 
+        // Get vision radius from character
+        let vision_radius = if let Some(character) = &self.current_character {
+            character.get_vision_radius() as i32
+        } else {
+            5 // Default vision radius
+        };
+
+        // Initialize explored tiles
+        let mut explored_tiles = std::collections::HashMap::new();
+
+        // Reveal initial area around player
+        Self::reveal_tiles_around_position(
+            &mut explored_tiles,
+            current_zone.x,
+            current_zone.y,
+            local_pos.x,
+            local_pos.y,
+            vision_radius,
+        );
+
         self.state = UIState::WorldExploration(WorldExplorationState {
             current_zone,
             player_local_pos: local_pos,
             zone_data,
             adjacent_zones,
             messages: vec!["Welcome to the world! Press L to look around, H for help, or start exploring with WASD.".to_string()],
+            explored_tiles,
+            vision_radius,
         });
         
         Ok(())
@@ -1827,6 +1849,60 @@ impl Game {
         Ok(false)
     }
 
+    fn reveal_tiles_around_position(
+        explored_tiles: &mut std::collections::HashMap<(i32, i32), std::collections::HashSet<(i32, i32)>>,
+        zone_x: i32,
+        zone_y: i32,
+        local_x: i32,
+        local_y: i32,
+        vision_radius: i32,
+    ) {
+        let zone_size = crate::world::ZONE_SIZE;
+
+        for dy in -vision_radius..=vision_radius {
+            for dx in -vision_radius..=vision_radius {
+                // Calculate distance for circular vision
+                let distance = ((dx * dx + dy * dy) as f32).sqrt();
+                if distance <= vision_radius as f32 {
+                    let tile_x = local_x + dx;
+                    let tile_y = local_y + dy;
+
+                    // Handle tiles that cross zone boundaries
+                    let (actual_zone_x, actual_zone_y, actual_local_x, actual_local_y) =
+                        if tile_x < 0 || tile_x >= zone_size || tile_y < 0 || tile_y >= zone_size {
+                            let zone_offset_x = if tile_x < 0 { -1 } else if tile_x >= zone_size { 1 } else { 0 };
+                            let zone_offset_y = if tile_y < 0 { -1 } else if tile_y >= zone_size { 1 } else { 0 };
+
+                            let new_local_x = if tile_x < 0 {
+                                zone_size + tile_x
+                            } else if tile_x >= zone_size {
+                                tile_x - zone_size
+                            } else {
+                                tile_x
+                            };
+
+                            let new_local_y = if tile_y < 0 {
+                                zone_size + tile_y
+                            } else if tile_y >= zone_size {
+                                tile_y - zone_size
+                            } else {
+                                tile_y
+                            };
+
+                            (zone_x + zone_offset_x, zone_y + zone_offset_y, new_local_x, new_local_y)
+                        } else {
+                            (zone_x, zone_y, tile_x, tile_y)
+                        };
+
+                    explored_tiles
+                        .entry((actual_zone_x, actual_zone_y))
+                        .or_insert_with(std::collections::HashSet::new)
+                        .insert((actual_local_x, actual_local_y));
+                }
+            }
+        }
+    }
+
     fn move_player(&mut self, dx: i32, dy: i32, world_state: &mut WorldExplorationState) -> anyhow::Result<()> {
         let new_local_x = world_state.player_local_pos.x + dx;
         let new_local_y = world_state.player_local_pos.y + dy;
@@ -1904,16 +1980,26 @@ impl Game {
         // Update positions
         world_state.player_local_pos = LocalCoord::new(final_local_x, final_local_y);
         self.player_position = WorldCoord::from_zone_local(new_zone, world_state.player_local_pos);
-        
+
         // Save player position to character data
         if let Some(character) = &mut self.current_character {
             character.current_zone = Some(new_zone);
             character.current_position = Some(world_state.player_local_pos);
         }
-        
+
+        // Reveal tiles around new position based on vision radius
+        Self::reveal_tiles_around_position(
+            &mut world_state.explored_tiles,
+            new_zone.x,
+            new_zone.y,
+            final_local_x,
+            final_local_y,
+            world_state.vision_radius,
+        );
+
         // Update the UI state
         self.state = UIState::WorldExploration(world_state.clone());
-        
+
         Ok(())
     }
 
@@ -2796,12 +2882,20 @@ impl Game {
             self.state = crate::ui::UIState::WorldExploration(world_state);
         } else {
             // Fallback if no saved state (shouldn't happen)
+            let vision_radius = if let Some(character) = &self.current_character {
+                character.get_vision_radius() as i32
+            } else {
+                5
+            };
+
             let world_state = crate::ui::WorldExplorationState {
                 current_zone: crate::world::ZoneCoord::new(4, 4), // Default center
                 player_local_pos: crate::world::LocalCoord::new(32, 32),
                 zone_data: None, // Will be regenerated
                 adjacent_zones: std::collections::HashMap::new(), // Empty - will be populated when zone loads
                 messages: vec!["You exit the dungeon and return to the world.".to_string()],
+                explored_tiles: std::collections::HashMap::new(),
+                vision_radius,
             };
             
             self.state = crate::ui::UIState::WorldExploration(world_state);

@@ -51,6 +51,11 @@ pub struct WorldExplorationState {
     pub zone_data: Option<crate::world::WorldZone>,
     pub adjacent_zones: std::collections::HashMap<crate::world::ZoneCoord, crate::world::WorldZone>, // Store adjacent zones for seamless world view
     pub messages: Vec<String>,
+    /// Explored tiles - tracks which tiles have been seen
+    /// Key: (zone_x, zone_y), Value: HashSet of (local_x, local_y)
+    pub explored_tiles: std::collections::HashMap<(i32, i32), std::collections::HashSet<(i32, i32)>>,
+    /// Vision radius for the current character
+    pub vision_radius: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -2070,6 +2075,26 @@ impl GameUI {
         f.render_widget(controls, left_chunks[2]);
     }
 
+    /// Apply fog of war dimming effect to a span if it's not currently visible
+    fn apply_fog_of_war(span: Span<'static>, is_visible: bool) -> Span<'static> {
+        if is_visible {
+            span
+        } else {
+            // Dim the color for explored but not currently visible tiles
+            let dimmed_style = match span.style.fg {
+                Some(Color::Red) => span.style.fg(Color::DarkGray),
+                Some(Color::Yellow) | Some(Color::LightYellow) => span.style.fg(Color::DarkGray),
+                Some(Color::Green) | Some(Color::LightGreen) => span.style.fg(Color::DarkGray),
+                Some(Color::Blue) | Some(Color::LightBlue) | Some(Color::Cyan) => span.style.fg(Color::DarkGray),
+                Some(Color::Magenta) | Some(Color::LightMagenta) => span.style.fg(Color::DarkGray),
+                Some(Color::White) => span.style.fg(Color::Gray),
+                Some(Color::Gray) => span.style.fg(Color::DarkGray),
+                _ => span.style.fg(Color::DarkGray),
+            };
+            Span::styled(span.content, dimmed_style.remove_modifier(Modifier::BOLD))
+        }
+    }
+
     fn generate_world_view(world_state: &WorldExplorationState, view_width: i32, view_height: i32) -> Vec<Line<'static>> {
         let mut world_content = vec![];
         
@@ -2096,6 +2121,50 @@ impl GameUI {
                         // Player position - bright yellow @ symbol
                         line_spans.push(Span::styled("@", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
                     } else {
+                        // Calculate which zone this tile belongs to for fog of war checking
+                        let (fog_zone_x, fog_zone_y, fog_local_x, fog_local_y) = if x < 0 || x >= crate::world::ZONE_SIZE || y < 0 || y >= crate::world::ZONE_SIZE {
+                            let zone_offset_x = if x < 0 { -1 } else if x >= crate::world::ZONE_SIZE { 1 } else { 0 };
+                            let zone_offset_y = if y < 0 { -1 } else if y >= crate::world::ZONE_SIZE { 1 } else { 0 };
+
+                            let new_local_x = if x < 0 {
+                                crate::world::ZONE_SIZE + x
+                            } else if x >= crate::world::ZONE_SIZE {
+                                x - crate::world::ZONE_SIZE
+                            } else {
+                                x
+                            };
+
+                            let new_local_y = if y < 0 {
+                                crate::world::ZONE_SIZE + y
+                            } else if y >= crate::world::ZONE_SIZE {
+                                y - crate::world::ZONE_SIZE
+                            } else {
+                                y
+                            };
+
+                            (world_state.current_zone.x + zone_offset_x, world_state.current_zone.y + zone_offset_y, new_local_x, new_local_y)
+                        } else {
+                            (world_state.current_zone.x, world_state.current_zone.y, x, y)
+                        };
+
+                        // Check if tile is explored
+                        let is_explored = world_state.explored_tiles
+                            .get(&(fog_zone_x, fog_zone_y))
+                            .map(|tiles| tiles.contains(&(fog_local_x, fog_local_y)))
+                            .unwrap_or(false);
+
+                        // Check if tile is currently visible (within vision radius)
+                        let dx = x - world_state.player_local_pos.x;
+                        let dy = y - world_state.player_local_pos.y;
+                        let distance = ((dx * dx + dy * dy) as f32).sqrt();
+                        let is_visible = distance <= world_state.vision_radius as f32;
+
+                        if !is_explored {
+                            // Unexplored: completely dark
+                            line_spans.push(Span::styled(" ", Style::default().fg(Color::Black)));
+                            continue;
+                        }
+
                         // Handle coordinates that might be outside current zone
                         let (zone_coord, local_x, local_y) = if x < 0 || x >= crate::world::ZONE_SIZE || y < 0 || y >= crate::world::ZONE_SIZE {
                             // Calculate which zone this coordinate belongs to
@@ -2140,13 +2209,14 @@ impl GameUI {
                                 for settlement in &adjacent_zone.settlements {
                                     if settlement.position.x == local_x && settlement.position.y == local_y {
                                         found_settlement = true;
-                                        match settlement.settlement_type {
-                                            crate::world::SettlementType::Capital => line_spans.push(Span::styled("█", Style::default().fg(Color::Magenta))),
-                                            crate::world::SettlementType::City => line_spans.push(Span::styled("●", Style::default().fg(Color::Cyan))),
-                                            crate::world::SettlementType::Town => line_spans.push(Span::styled("○", Style::default().fg(Color::White))),
-                                            crate::world::SettlementType::Village => line_spans.push(Span::styled("◦", Style::default().fg(Color::LightYellow))),
-                                            crate::world::SettlementType::Outpost => line_spans.push(Span::styled("·", Style::default().fg(Color::Gray))),
-                                        }
+                                        let span = match settlement.settlement_type {
+                                            crate::world::SettlementType::Capital => Span::styled("█", Style::default().fg(Color::Magenta)),
+                                            crate::world::SettlementType::City => Span::styled("●", Style::default().fg(Color::Cyan)),
+                                            crate::world::SettlementType::Town => Span::styled("○", Style::default().fg(Color::White)),
+                                            crate::world::SettlementType::Village => Span::styled("◦", Style::default().fg(Color::LightYellow)),
+                                            crate::world::SettlementType::Outpost => Span::styled("·", Style::default().fg(Color::Gray)),
+                                        };
+                                        line_spans.push(Self::apply_fog_of_war(span, is_visible));
                                         break;
                                     }
                                 }
@@ -2156,9 +2226,9 @@ impl GameUI {
                                     let mut found_road = false;
                                     if adjacent_zone.roads.get_road_at(crate::world::LocalCoord::new(local_x, local_y)).is_some() {
                                         found_road = true;
-                                        line_spans.push(Span::styled("═", Style::default().fg(Color::DarkGray)));
+                                        line_spans.push(Self::apply_fog_of_war(Span::styled("═", Style::default().fg(Color::DarkGray)), is_visible));
                                     }
-                                    
+
                                     if !found_road {
                                         // Render terrain with slightly faded colors to show it's from adjacent zone
                                         if local_x >= 0 && local_x < crate::world::ZONE_SIZE && local_y >= 0 && local_y < crate::world::ZONE_SIZE {
@@ -2179,21 +2249,21 @@ impl GameUI {
                                                         crate::world::TerrainType::Snow => Color::White,
                                                         crate::world::TerrainType::Tundra => Color::DarkGray,
                                                     };
-                                                    line_spans.push(Span::styled(symbol.to_string(), Style::default().fg(base_color)));
+                                                    line_spans.push(Self::apply_fog_of_war(Span::styled(symbol.to_string(), Style::default().fg(base_color)), is_visible));
                                                 } else {
-                                                    line_spans.push(Span::styled("·", Style::default().fg(Color::DarkGray)));
+                                                    line_spans.push(Self::apply_fog_of_war(Span::styled("·", Style::default().fg(Color::DarkGray)), is_visible));
                                                 }
                                             } else {
-                                                line_spans.push(Span::styled("·", Style::default().fg(Color::DarkGray)));
+                                                line_spans.push(Self::apply_fog_of_war(Span::styled("·", Style::default().fg(Color::DarkGray)), is_visible));
                                             }
                                         } else {
-                                            line_spans.push(Span::styled("·", Style::default().fg(Color::DarkGray)));
+                                            line_spans.push(Self::apply_fog_of_war(Span::styled("·", Style::default().fg(Color::DarkGray)), is_visible));
                                         }
                                     }
                                 }
                             } else {
                                 // No data for this adjacent zone - show placeholder
-                                line_spans.push(Span::styled("·", Style::default().fg(Color::DarkGray)));
+                                line_spans.push(Self::apply_fog_of_war(Span::styled("·", Style::default().fg(Color::DarkGray)), is_visible));
                             }
                             continue;
                         }
@@ -2206,17 +2276,18 @@ impl GameUI {
                         for settlement in &zone_data.settlements {
                             if settlement.position.x == lookup_x && settlement.position.y == lookup_y {
                                 found_settlement = true;
-                                match settlement.settlement_type {
-                                    crate::world::SettlementType::Capital => line_spans.push(Span::styled("█", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
-                                    crate::world::SettlementType::City => line_spans.push(Span::styled("●", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-                                    crate::world::SettlementType::Town => line_spans.push(Span::styled("○", Style::default().fg(Color::White))),
-                                    crate::world::SettlementType::Village => line_spans.push(Span::styled("◦", Style::default().fg(Color::LightYellow))),
-                                    crate::world::SettlementType::Outpost => line_spans.push(Span::styled("·", Style::default().fg(Color::Gray))),
-                                }
+                                let span = match settlement.settlement_type {
+                                    crate::world::SettlementType::Capital => Span::styled("█", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                                    crate::world::SettlementType::City => Span::styled("●", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                                    crate::world::SettlementType::Town => Span::styled("○", Style::default().fg(Color::White)),
+                                    crate::world::SettlementType::Village => Span::styled("◦", Style::default().fg(Color::LightYellow)),
+                                    crate::world::SettlementType::Outpost => Span::styled("·", Style::default().fg(Color::Gray)),
+                                };
+                                line_spans.push(Self::apply_fog_of_war(span, is_visible));
                                 break;
                             }
                         }
-                        
+
                         if !found_settlement {
                             // Check for NPCs first
                             let mut found_npc = false;
@@ -2240,11 +2311,11 @@ impl GameUI {
                                         crate::world::NPCType::Bandit => Color::Red,
                                         crate::world::NPCType::Explorer => Color::Cyan,
                                     };
-                                    line_spans.push(Span::styled(npc.npc_type.get_ascii_char().to_string(), Style::default().fg(npc_color)));
+                                    line_spans.push(Self::apply_fog_of_war(Span::styled(npc.npc_type.get_ascii_char().to_string(), Style::default().fg(npc_color)), is_visible));
                                     break;
                                 }
                             }
-                            
+
                             if !found_npc {
                                 // Check for POIs (Points of Interest)
                                 let mut found_poi = false;
@@ -2264,11 +2335,11 @@ impl GameUI {
                                             crate::world::PoiType::TreasureVault => ('♛', Color::Yellow),
                                             _ => ('?', Color::White),
                                         };
-                                        line_spans.push(Span::styled(symbol.to_string(), Style::default().fg(color)));
+                                        line_spans.push(Self::apply_fog_of_war(Span::styled(symbol.to_string(), Style::default().fg(color)), is_visible));
                                         break;
                                     }
                                 }
-                                
+
                                 if !found_poi {
                                     // Check for roads
                                     let mut found_road = false;
@@ -2283,7 +2354,7 @@ impl GameUI {
                                                     crate::world::RoadType::Highway => Color::Yellow,
                                                     crate::world::RoadType::Imperial => Color::White,
                                                 };
-                                                line_spans.push(Span::styled("═", Style::default().fg(road_color)));
+                                                line_spans.push(Self::apply_fog_of_war(Span::styled("═", Style::default().fg(road_color)), is_visible));
                                                 break;
                                             }
                                         }
@@ -2343,12 +2414,12 @@ impl GameUI {
                                                     style = style.fg(Color::DarkGray);
                                                 }
                                                 
-                                                line_spans.push(Span::styled(symbol.to_string(), style));
+                                                line_spans.push(Self::apply_fog_of_war(Span::styled(symbol.to_string(), style), is_visible));
                                             } else {
-                                                line_spans.push(Span::styled("?", Style::default().fg(Color::Red)));
+                                                line_spans.push(Self::apply_fog_of_war(Span::styled("?", Style::default().fg(Color::Red)), is_visible));
                                             }
                                         } else {
-                                            line_spans.push(Span::styled("?", Style::default().fg(Color::Red)));
+                                            line_spans.push(Self::apply_fog_of_war(Span::styled("?", Style::default().fg(Color::Red)), is_visible));
                                         }
                                     }
                                 }

@@ -47,6 +47,10 @@ pub struct CharacterProgress {
     /// Discovered locations
     pub discovered_locations: Vec<(i32, i32)>, // Zone coordinates
 
+    /// Explored world tiles - tracks which tiles have been seen
+    /// Key: (zone_x, zone_y), Value: HashSet of (local_x, local_y)
+    pub explored_tiles: std::collections::HashMap<(i32, i32), std::collections::HashSet<(i32, i32)>>,
+
     /// Faction relationships
     pub faction_relationships: std::collections::HashMap<String, i32>,
 
@@ -90,6 +94,67 @@ impl CharacterState {
     /// Get vision radius (accounts for racial abilities and equipment)
     pub fn get_vision_radius(&self) -> u8 {
         self.character.get_vision_radius()
+    }
+
+    /// Mark a tile as explored
+    pub fn mark_tile_explored(&mut self, zone_x: i32, zone_y: i32, local_x: i32, local_y: i32) {
+        self.progress.explored_tiles
+            .entry((zone_x, zone_y))
+            .or_insert_with(std::collections::HashSet::new)
+            .insert((local_x, local_y));
+    }
+
+    /// Check if a tile has been explored
+    pub fn is_tile_explored(&self, zone_x: i32, zone_y: i32, local_x: i32, local_y: i32) -> bool {
+        self.progress.explored_tiles
+            .get(&(zone_x, zone_y))
+            .map(|tiles| tiles.contains(&(local_x, local_y)))
+            .unwrap_or(false)
+    }
+
+    /// Reveal tiles within vision radius around a position
+    pub fn reveal_around_position(&mut self, zone_x: i32, zone_y: i32, local_x: i32, local_y: i32, vision_radius: i32) {
+        let zone_size = 64; // ZONE_SIZE constant
+
+        for dy in -vision_radius..=vision_radius {
+            for dx in -vision_radius..=vision_radius {
+                // Calculate distance for circular vision
+                let distance = ((dx * dx + dy * dy) as f32).sqrt();
+                if distance <= vision_radius as f32 {
+                    let tile_x = local_x + dx;
+                    let tile_y = local_y + dy;
+
+                    // Handle tiles that cross zone boundaries
+                    let (actual_zone_x, actual_zone_y, actual_local_x, actual_local_y) =
+                        if tile_x < 0 || tile_x >= zone_size || tile_y < 0 || tile_y >= zone_size {
+                            let zone_offset_x = if tile_x < 0 { -1 } else if tile_x >= zone_size { 1 } else { 0 };
+                            let zone_offset_y = if tile_y < 0 { -1 } else if tile_y >= zone_size { 1 } else { 0 };
+
+                            let new_local_x = if tile_x < 0 {
+                                zone_size + tile_x
+                            } else if tile_x >= zone_size {
+                                tile_x - zone_size
+                            } else {
+                                tile_x
+                            };
+
+                            let new_local_y = if tile_y < 0 {
+                                zone_size + tile_y
+                            } else if tile_y >= zone_size {
+                                tile_y - zone_size
+                            } else {
+                                tile_y
+                            };
+
+                            (zone_x + zone_offset_x, zone_y + zone_offset_y, new_local_x, new_local_y)
+                        } else {
+                            (zone_x, zone_y, tile_x, tile_y)
+                        };
+
+                    self.mark_tile_explored(actual_zone_x, actual_zone_y, actual_local_x, actual_local_y);
+                }
+            }
+        }
     }
 }
 
