@@ -150,6 +150,9 @@ pub struct TacticalCombatState {
     // Defensive stance tracking
     pub defending_participants: Vec<usize>, // Indices of participants in defensive stance this round
 
+    // Combat end state
+    pub combat_ended_next_state: Option<Box<UIState>>, // If Some, combat has ended - press any key to transition
+
     // Return state
     pub return_to_dungeon: Option<DungeonExplorationState>,
 }
@@ -376,6 +379,7 @@ impl TacticalCombatState {
             pending_action: None,
             available_targets: Vec::new(),
             defending_participants: Vec::new(),
+            combat_ended_next_state: None,
             return_to_dungeon,
         }
     }

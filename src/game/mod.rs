@@ -4356,6 +4356,13 @@ impl Game {
     }
 
     fn handle_tactical_combat_input(&mut self, key: KeyEvent, mut tactical_state: crate::ui::TacticalCombatState) -> anyhow::Result<()> {
+        // Check if combat has ended and we're waiting for key press to transition
+        if let Some(next_state) = tactical_state.combat_ended_next_state.take() {
+            // Any key press transitions to the next state
+            self.state = *next_state; // Dereference the Box
+            return Ok(());
+        }
+
         match key.code {
             // Arrow keys - move cursor
             KeyCode::Up => {
@@ -4604,7 +4611,7 @@ impl Game {
                     }
 
                     // Check for victory/defeat conditions
-                    if let Some(new_state) = self.check_tactical_combat_end(&tactical_state) {
+                    if let Some(new_state) = self.check_tactical_combat_end(tactical_state) {
                         self.state = new_state;
                         return Ok(());
                     }
@@ -4714,19 +4721,22 @@ impl Game {
         Ok(())
     }
 
-    fn check_tactical_combat_end(&self, tactical_state: &crate::ui::TacticalCombatState) -> Option<UIState> {
+    fn check_tactical_combat_end(&self, tactical_state: &mut crate::ui::TacticalCombatState) -> Option<UIState> {
         // Check if player is defeated
         let player_alive = tactical_state.participants.iter()
             .any(|p| p.base_participant.is_player && p.base_participant.combat_stats.hit_points.current > 0);
 
         if !player_alive {
             // Player defeated - return to character selection
-            println!("\n=== DEFEAT ===");
-            println!("You have been defeated in combat!");
-            println!("Returning to character selection...");
+            tactical_state.add_log(String::new());
+            tactical_state.add_log("=== DEFEAT ===".to_string());
+            tactical_state.add_log("You have been defeated in combat!".to_string());
+            tactical_state.add_log("Press any key to return to main menu...".to_string());
 
-            // TODO: Implement proper defeat handling (respawn, game over, restore HP, etc.)
-            return Some(UIState::MainMenu);
+            // Set the next state to transition to when user presses a key
+            tactical_state.combat_ended_next_state = Some(Box::new(UIState::MainMenu));
+            // Don't transition immediately - wait for key press
+            return None;
         }
 
         // Check if all enemies are defeated
@@ -4735,18 +4745,25 @@ impl Game {
 
         if !enemies_alive {
             // Victory! Return to previous state if available
-            println!("\n=== VICTORY ===");
-            println!("All enemies have been defeated!");
+            tactical_state.add_log(String::new());
+            tactical_state.add_log("=== VICTORY ===".to_string());
+            tactical_state.add_log("All enemies have been defeated!".to_string());
 
-            if let Some(dungeon_state) = &tactical_state.return_to_dungeon {
+            // Clone dungeon state before adding more logs to avoid borrow conflicts
+            let dungeon_state_clone = tactical_state.return_to_dungeon.clone();
+
+            if let Some(dungeon_state) = dungeon_state_clone {
                 // Return to dungeon exploration
-                println!("Returning to dungeon exploration...");
-                return Some(UIState::DungeonExploration(dungeon_state.clone()));
+                tactical_state.add_log("Press any key to return to dungeon exploration...".to_string());
+                tactical_state.combat_ended_next_state = Some(Box::new(UIState::DungeonExploration(dungeon_state)));
             } else {
                 // No previous state - return to main menu with victory message
-                println!("Returning to main menu...");
-                return Some(UIState::MainMenu);
+                tactical_state.add_log("Press any key to return to main menu...".to_string());
+                tactical_state.combat_ended_next_state = Some(Box::new(UIState::MainMenu));
             }
+
+            // Don't transition immediately - wait for key press
+            return None;
         }
 
         // Combat continues
