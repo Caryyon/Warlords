@@ -1576,18 +1576,19 @@ impl Game {
             None
         };
         
-        // Load adjacent zones for seamless world view
+        // Load adjacent zones for seamless world view - proactively generate them
         let mut adjacent_zones = std::collections::HashMap::new();
         let adjacent_coords = [
             (current_zone.x - 1, current_zone.y - 1), (current_zone.x, current_zone.y - 1), (current_zone.x + 1, current_zone.y - 1),
             (current_zone.x - 1, current_zone.y),                                            (current_zone.x + 1, current_zone.y),
             (current_zone.x - 1, current_zone.y + 1), (current_zone.x, current_zone.y + 1), (current_zone.x + 1, current_zone.y + 1),
         ];
-        
-        for (x, y) in adjacent_coords.iter() {
-            let adj_coord = crate::world::ZoneCoord::new(*x, *y);
-            if let Some(world_manager) = &self.world_manager {
-                if let Some(adj_zone) = world_manager.get_zone_if_exists(adj_coord) {
+
+        if let Some(world_manager) = &mut self.world_manager {
+            for (x, y) in adjacent_coords.iter() {
+                let adj_coord = crate::world::ZoneCoord::new(*x, *y);
+                // Proactively generate adjacent zones for seamless world
+                if let Ok(adj_zone) = world_manager.get_zone(adj_coord) {
                     adjacent_zones.insert(adj_coord, adj_zone.clone());
                 }
             }
@@ -1857,17 +1858,18 @@ impl Game {
                 world_manager.get_zone(new_zone)?; // Generate if needed
                 world_state.zone_data = world_manager.get_zone(new_zone).ok().cloned();
                 
-                // Load adjacent zones for seamless world view
+                // Load adjacent zones for seamless world view - proactively generate them
                 world_state.adjacent_zones.clear();
                 let adjacent_coords = [
                     (new_zone.x - 1, new_zone.y - 1), (new_zone.x, new_zone.y - 1), (new_zone.x + 1, new_zone.y - 1),
                     (new_zone.x - 1, new_zone.y),                                    (new_zone.x + 1, new_zone.y),
                     (new_zone.x - 1, new_zone.y + 1), (new_zone.x, new_zone.y + 1), (new_zone.x + 1, new_zone.y + 1),
                 ];
-                
+
                 for (x, y) in adjacent_coords.iter() {
                     let adj_coord = crate::world::ZoneCoord::new(*x, *y);
-                    if let Some(adj_zone) = world_manager.get_zone_if_exists(adj_coord) {
+                    // Proactively generate adjacent zones for seamless world
+                    if let Ok(adj_zone) = world_manager.get_zone(adj_coord) {
                         world_state.adjacent_zones.insert(adj_coord, adj_zone.clone());
                     }
                 }
@@ -1879,17 +1881,18 @@ impl Game {
                 if let Some(world_manager) = &mut self.world_manager {
                     world_state.zone_data = world_manager.get_zone(new_zone).ok().cloned();
                     
-                    // Also load adjacent zones if we didn't have zone data
+                    // Also load adjacent zones if we didn't have zone data - proactively generate them
                     if world_state.adjacent_zones.is_empty() {
                         let adjacent_coords = [
                             (new_zone.x - 1, new_zone.y - 1), (new_zone.x, new_zone.y - 1), (new_zone.x + 1, new_zone.y - 1),
                             (new_zone.x - 1, new_zone.y),                                    (new_zone.x + 1, new_zone.y),
                             (new_zone.x - 1, new_zone.y + 1), (new_zone.x, new_zone.y + 1), (new_zone.x + 1, new_zone.y + 1),
                         ];
-                        
+
                         for (x, y) in adjacent_coords.iter() {
                             let adj_coord = crate::world::ZoneCoord::new(*x, *y);
-                            if let Some(adj_zone) = world_manager.get_zone_if_exists(adj_coord) {
+                            // Proactively generate adjacent zones for seamless world
+                            if let Ok(adj_zone) = world_manager.get_zone(adj_coord) {
                                 world_state.adjacent_zones.insert(adj_coord, adj_zone.clone());
                             }
                         }

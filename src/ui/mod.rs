@@ -2179,18 +2179,7 @@ impl GameUI {
                                                         crate::world::TerrainType::Snow => Color::White,
                                                         crate::world::TerrainType::Tundra => Color::DarkGray,
                                                     };
-                                                    // Fade the color for adjacent zones
-                                                    let faded_color = match base_color {
-                                                        Color::Green => Color::DarkGray,
-                                                        Color::Blue => Color::DarkGray,
-                                                        Color::Yellow => Color::DarkGray,
-                                                        Color::Cyan => Color::DarkGray,
-                                                        Color::White => Color::DarkGray,
-                                                        Color::Gray => Color::DarkGray,
-                                                        Color::DarkGray => Color::DarkGray,
-                                                        _ => Color::DarkGray,
-                                                    };
-                                                    line_spans.push(Span::styled(symbol.to_string(), Style::default().fg(faded_color)));
+                                                    line_spans.push(Span::styled(symbol.to_string(), Style::default().fg(base_color)));
                                                 } else {
                                                     line_spans.push(Span::styled("·", Style::default().fg(Color::DarkGray)));
                                                 }
