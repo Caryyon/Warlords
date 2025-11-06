@@ -2887,16 +2887,16 @@ impl GameUI {
                             .unwrap_or(crate::forge::TerrainFeature::Open);
 
                         let (symbol, color) = match terrain {
-                            crate::forge::TerrainFeature::Open => ('.', Color::Gray),
-                            crate::forge::TerrainFeature::Obstacle => ('#', Color::DarkGray),
-                            crate::forge::TerrainFeature::DifficultTerrain => ('~', Color::Yellow),
-                            crate::forge::TerrainFeature::Cover => ('=', Color::Green),
-                            crate::forge::TerrainFeature::Hazard => ('^', Color::Red),
-                            crate::forge::TerrainFeature::Elevation => ('△', Color::LightYellow),
+                            crate::forge::TerrainFeature::Open => ('·', Color::DarkGray),
+                            crate::forge::TerrainFeature::Obstacle => ('▓', Color::Gray),
+                            crate::forge::TerrainFeature::DifficultTerrain => ('≋', Color::Yellow),
+                            crate::forge::TerrainFeature::Cover => ('▒', Color::Green),
+                            crate::forge::TerrainFeature::Hazard => ('※', Color::Red),
+                            crate::forge::TerrainFeature::Elevation => ('▲', Color::LightYellow),
                             crate::forge::TerrainFeature::Water => ('≈', Color::Blue),
-                            crate::forge::TerrainFeature::Altar => ('♦', Color::Magenta),
-                            crate::forge::TerrainFeature::Pillar => ('○', Color::Gray),
-                            crate::forge::TerrainFeature::Pit => ('O', Color::Red),
+                            crate::forge::TerrainFeature::Altar => ('✦', Color::Magenta),
+                            crate::forge::TerrainFeature::Pillar => ('●', Color::Gray),
+                            crate::forge::TerrainFeature::Pit => ('◎', Color::Red),
                         };
 
                         line_spans.push(Span::styled(symbol.to_string(), Style::default().fg(color)));
@@ -2919,10 +2919,20 @@ impl GameUI {
             battlefield_lines.push(Line::from(" ".repeat(available_width as usize)));
         }
 
+        // Create decorative battlefield title with ASCII art
+        let battlefield_title = vec![
+            Span::styled("╡ ", Style::default().fg(Color::Green)),
+            Span::styled("⚔", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" BATTLEFIELD ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("⚔", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" ╞", Style::default().fg(Color::Green)),
+        ];
+
         let battlefield_widget = Paragraph::new(battlefield_lines)
             .block(Block::default()
-                .title("Battlefield")
+                .title(Line::from(battlefield_title))
                 .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Double)
                 .border_style(Style::default().fg(Color::Green)));
 
         f.render_widget(battlefield_widget, area);
@@ -2940,10 +2950,13 @@ impl GameUI {
 
         // === INITIATIVE ORDER ===
         let mut init_lines = vec![
-            Line::from(Span::styled(
-                format!("Round {}", tactical_state.round_number),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            )),
+            Line::from(vec![
+                Span::styled("═══", Style::default().fg(Color::Yellow)),
+                Span::styled("╣ ", Style::default().fg(Color::Yellow)),
+                Span::styled(format!("Round {}", tactical_state.round_number), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" ╠", Style::default().fg(Color::Yellow)),
+                Span::styled("═══", Style::default().fg(Color::Yellow)),
+            ]),
             Line::from(""),
         ];
 
@@ -2968,7 +2981,7 @@ impl GameUI {
                 Color::Red
             };
 
-            let marker = if is_current { "→ " } else { "  " };
+            let marker = if is_current { "» " } else { "  " };
             let style = if is_current {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
             } else {
@@ -2977,15 +2990,25 @@ impl GameUI {
 
             init_lines.push(Line::from(vec![
                 Span::styled(marker, style),
-                Span::styled(symbol, style),
-                Span::styled(format!(" {} ({})", participant.base_participant.name, init_roll), style),
+                Span::styled(symbol, style.add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" {} ", participant.base_participant.name), style),
+                Span::styled(format!("({})", init_roll), Style::default().fg(Color::DarkGray)),
             ]));
         }
 
+        let initiative_title = vec![
+            Span::styled("╡ ", Style::default().fg(Color::Yellow)),
+            Span::styled("⚡", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(" INITIATIVE ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("⚡", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(" ╞", Style::default().fg(Color::Yellow)),
+        ];
+
         let initiative_widget = Paragraph::new(init_lines)
             .block(Block::default()
-                .title("Initiative Order")
+                .title(Line::from(initiative_title))
                 .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Double)
                 .border_style(Style::default().fg(Color::Yellow)));
 
         f.render_widget(initiative_widget, sidebar_chunks[0]);
@@ -2995,17 +3018,30 @@ impl GameUI {
         let stats_lines = if let Some(participant) = current_participant {
             if participant.base_participant.is_player {
                 // Show full stats for player characters
+                let hp_current = participant.base_participant.combat_stats.hit_points.current;
+                let hp_max = participant.base_participant.combat_stats.hit_points.max;
+                let hp_percent = (hp_current as f32 / hp_max as f32 * 100.0) as u32;
+                let hp_color = if hp_percent >= 75 { Color::Green } else if hp_percent >= 50 { Color::Yellow } else if hp_percent >= 25 { Color::LightRed } else { Color::Red };
+
                 vec![
-                    Line::from(Span::styled(
-                        participant.base_participant.name.clone(),
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    )),
+                    Line::from(vec![
+                        Span::styled("╔═══ ", Style::default().fg(Color::Cyan)),
+                        Span::styled(participant.base_participant.name.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        Span::styled(" ═══╗", Style::default().fg(Color::Cyan)),
+                    ]),
                     Line::from(""),
-                    Line::from(format!("HP: {}/{}",
-                        participant.base_participant.combat_stats.hit_points.current,
-                        participant.base_participant.combat_stats.hit_points.max)),
-                    Line::from(format!("AV: {}", participant.base_participant.combat_stats.attack_value)),
-                    Line::from(format!("DV: {}", participant.base_participant.combat_stats.defensive_value)),
+                    Line::from(vec![
+                        Span::styled("♥ ", Style::default().fg(hp_color).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("{}/{}", hp_current, hp_max), Style::default().fg(hp_color)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("⚔ ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("AV: {}", participant.base_participant.combat_stats.attack_value), Style::default().fg(Color::White)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("◈ ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("DV: {}", participant.base_participant.combat_stats.defensive_value), Style::default().fg(Color::White)),
+                    ]),
                 ]
             } else {
                 // Show threat level for enemies instead of exact stats
@@ -3030,17 +3066,20 @@ impl GameUI {
                 };
 
                 vec![
-                    Line::from(Span::styled(
-                        participant.base_participant.name.clone(),
-                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                    )),
+                    Line::from(vec![
+                        Span::styled("╔═══ ", Style::default().fg(Color::Red)),
+                        Span::styled(participant.base_participant.name.clone(), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                        Span::styled(" ═══╗", Style::default().fg(Color::Red)),
+                    ]),
                     Line::from(""),
                     Line::from(vec![
+                        Span::styled("⚠ ", Style::default().fg(threat_color).add_modifier(Modifier::BOLD)),
                         Span::raw("Threat: "),
                         Span::styled(threat_level, Style::default().fg(threat_color).add_modifier(Modifier::BOLD)),
                     ]),
                     Line::from(vec![
-                        Span::raw("Condition: "),
+                        Span::styled("♥ ", Style::default().fg(health_status.1).add_modifier(Modifier::BOLD)),
+                        Span::raw("Status: "),
                         Span::styled(health_status.0, Style::default().fg(health_status.1)),
                     ]),
                 ]
@@ -3049,10 +3088,19 @@ impl GameUI {
             vec![Line::from("No active participant")]
         };
 
+        let stats_title = vec![
+            Span::styled("╡ ", Style::default().fg(Color::Cyan)),
+            Span::styled("◈", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(" STATS ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled("◈", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(" ╞", Style::default().fg(Color::Cyan)),
+        ];
+
         let stats_widget = Paragraph::new(stats_lines)
             .block(Block::default()
-                .title("Quick Stats")
+                .title(Line::from(stats_title))
                 .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Double)
                 .border_style(Style::default().fg(Color::Cyan)));
 
         f.render_widget(stats_widget, sidebar_chunks[1]);
@@ -3069,10 +3117,19 @@ impl GameUI {
             .map(|msg| Line::from(msg.clone()))
             .collect();
 
+        let log_title = vec![
+            Span::styled("╡ ", Style::default().fg(Color::Blue)),
+            Span::styled("⚔", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(" BATTLE LOG ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::styled("⚔", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(" ╞", Style::default().fg(Color::Blue)),
+        ];
+
         let log_widget = Paragraph::new(log_lines)
             .block(Block::default()
-                .title("Combat Log")
+                .title(Line::from(log_title))
                 .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Blue)))
             .wrap(Wrap { trim: true });
 
@@ -3082,27 +3139,38 @@ impl GameUI {
     fn draw_action_hotkey_bar(f: &mut Frame, area: ratatui::layout::Rect, _tactical_state: &TacticalCombatState) {
         let hotkey_text = vec![
             Line::from(vec![
-                Span::styled("[A]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("║ ", Style::default().fg(Color::Green)),
+                Span::styled("⚔[A]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled("ttack ", Style::default().fg(Color::White)),
-                Span::styled("[M]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("♦[M]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled("ove ", Style::default().fg(Color::White)),
-                Span::styled("[C]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("✦[C]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled("ast ", Style::default().fg(Color::White)),
-                Span::styled("[U]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("◈[U]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled("se ", Style::default().fg(Color::White)),
-                Span::styled("[D]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("◉[D]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled("efend ", Style::default().fg(Color::White)),
-                Span::styled("[S]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("★[S]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled("kills ", Style::default().fg(Color::White)),
-                Span::styled("[E]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("▶[E]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled("nd Turn", Style::default().fg(Color::White)),
+                Span::styled(" ║", Style::default().fg(Color::Green)),
             ]),
+        ];
+
+        let actions_title = vec![
+            Span::styled("╡ ", Style::default().fg(Color::Green)),
+            Span::styled("☆", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(" ACTIONS ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("☆", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(" ╞", Style::default().fg(Color::Green)),
         ];
 
         let hotkeys_widget = Paragraph::new(hotkey_text)
             .block(Block::default()
-                .title("Actions")
+                .title(Line::from(actions_title))
                 .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Thick)
                 .border_style(Style::default().fg(Color::Green)))
             .alignment(Alignment::Center);
 
@@ -3112,20 +3180,30 @@ impl GameUI {
     fn draw_command_input_panel(f: &mut Frame, area: ratatui::layout::Rect, tactical_state: &TacticalCombatState) {
         let input_text = if tactical_state.command_buffer.is_empty() {
             Line::from(vec![
-                Span::styled("> ", Style::default().fg(Color::Green)),
+                Span::styled("» ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
                 Span::styled("Enter command...", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
             ])
         } else {
             Line::from(vec![
-                Span::styled("> ", Style::default().fg(Color::Green)),
+                Span::styled("» ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
                 Span::styled(&tactical_state.command_buffer, Style::default().fg(Color::White)),
+                Span::styled("█", Style::default().fg(Color::White)),
             ])
         };
 
+        let command_title = vec![
+            Span::styled("╡ ", Style::default().fg(Color::Green)),
+            Span::styled("⌘", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(" COMMAND ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("⌘", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(" ╞", Style::default().fg(Color::Green)),
+        ];
+
         let input_widget = Paragraph::new(input_text)
             .block(Block::default()
-                .title("Command Input")
+                .title(Line::from(command_title))
                 .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Green)));
 
         f.render_widget(input_widget, area);
