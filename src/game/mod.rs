@@ -4605,6 +4605,12 @@ impl Game {
 
                         if new_hp == 0 {
                             tactical_state.add_log(format!("{} has been defeated!", defender_name));
+
+                            // Track defeated enemies for removal from dungeon
+                            let defender = &tactical_state.participants[target_idx];
+                            if !defender.base_participant.is_player {
+                                tactical_state.defeated_enemy_names.push(defender_name.clone());
+                            }
                         }
                     } else {
                         tactical_state.add_log(format!("MISS! (Needed {} to hit)", final_defensive_value));
@@ -4750,12 +4756,15 @@ impl Game {
             tactical_state.add_log("All enemies have been defeated!".to_string());
 
             // Clone dungeon state before adding more logs to avoid borrow conflicts
-            let dungeon_state_clone = tactical_state.return_to_dungeon.clone();
+            let mut dungeon_state_clone = tactical_state.return_to_dungeon.clone();
 
-            if let Some(dungeon_state) = dungeon_state_clone {
+            if let Some(ref mut dungeon_state) = dungeon_state_clone {
+                // Remove defeated creatures and create corpses
+                self.remove_defeated_enemies_from_dungeon(dungeon_state, &tactical_state.defeated_enemy_names);
+
                 // Return to dungeon exploration
                 tactical_state.add_log("Press any key to return to dungeon exploration...".to_string());
-                tactical_state.combat_ended_next_state = Some(Box::new(UIState::DungeonExploration(dungeon_state)));
+                tactical_state.combat_ended_next_state = Some(Box::new(UIState::DungeonExploration(dungeon_state.clone())));
             } else {
                 // No previous state - return to main menu with victory message
                 tactical_state.add_log("Press any key to return to main menu...".to_string());
@@ -4768,6 +4777,28 @@ impl Game {
 
         // Combat continues
         None
+    }
+
+    fn remove_defeated_enemies_from_dungeon(&self, dungeon_state: &mut crate::ui::DungeonExplorationState, defeated_names: &[String]) {
+        // Get current floor
+        if let Some(floor) = dungeon_state.dungeon.floors.get_mut(&dungeon_state.dungeon.current_floor) {
+            // For each defeated enemy
+            for defeated_name in defeated_names {
+                // Find and remove the creature
+                if let Some(index) = floor.creatures.iter().position(|c| &c.name == defeated_name) {
+                    let creature = floor.creatures.remove(index);
+
+                    // Create a corpse at the creature's position
+                    let corpse = crate::world::DungeonCorpse::new(
+                        creature.position,
+                        creature.creature_type,
+                        creature.name.clone(),
+                    );
+
+                    floor.corpses.push(corpse);
+                }
+            }
+        }
     }
 
     fn advance_turn(&mut self, tactical_state: &mut crate::ui::TacticalCombatState) -> Option<UIState> {
@@ -4951,6 +4982,12 @@ impl Game {
 
             if new_hp == 0 {
                 tactical_state.add_log(format!("{} has been defeated!", defender_name));
+
+                // Track defeated enemies for removal from dungeon
+                let defender = &tactical_state.participants[target_idx];
+                if !defender.base_participant.is_player {
+                    tactical_state.defeated_enemy_names.push(defender_name.clone());
+                }
 
                 // Check for victory/defeat after AI defeats player
                 // This is handled in process_ai_turns_until_player which checks before each turn

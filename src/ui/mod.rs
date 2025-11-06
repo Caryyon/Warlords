@@ -153,6 +153,9 @@ pub struct TacticalCombatState {
     // Combat end state
     pub combat_ended_next_state: Option<Box<UIState>>, // If Some, combat has ended - press any key to transition
 
+    // Defeated enemies tracking
+    pub defeated_enemy_names: Vec<String>, // Names of defeated non-player participants
+
     // Return state
     pub return_to_dungeon: Option<DungeonExplorationState>,
 }
@@ -380,6 +383,7 @@ impl TacticalCombatState {
             available_targets: Vec::new(),
             defending_participants: Vec::new(),
             combat_ended_next_state: None,
+            defeated_enemy_names: Vec::new(),
             return_to_dungeon,
         }
     }
