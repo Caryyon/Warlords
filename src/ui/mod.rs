@@ -2081,14 +2081,29 @@ impl GameUI {
             span
         } else {
             // Dim the color for explored but not currently visible tiles
+            // Use darker versions of colors to preserve the colorful world while maintaining fog of war
             let dimmed_style = match span.style.fg {
-                Some(Color::Red) => span.style.fg(Color::DarkGray),
-                Some(Color::Yellow) | Some(Color::LightYellow) => span.style.fg(Color::DarkGray),
-                Some(Color::Green) | Some(Color::LightGreen) => span.style.fg(Color::DarkGray),
-                Some(Color::Blue) | Some(Color::LightBlue) | Some(Color::Cyan) => span.style.fg(Color::DarkGray),
-                Some(Color::Magenta) | Some(Color::LightMagenta) => span.style.fg(Color::DarkGray),
+                // Reds: keep red tones but dimmed
+                Some(Color::Red) | Some(Color::LightRed) => span.style.fg(Color::Red),
+
+                // Yellows: use darker yellow tones
+                Some(Color::Yellow) | Some(Color::LightYellow) => span.style.fg(Color::Yellow),
+
+                // Greens: keep green but darker
+                Some(Color::Green) | Some(Color::LightGreen) => span.style.fg(Color::Green),
+
+                // Blues and Cyans: preserve blue tones
+                Some(Color::Blue) | Some(Color::LightBlue) => span.style.fg(Color::Blue),
+                Some(Color::Cyan) | Some(Color::LightCyan) => span.style.fg(Color::Cyan),
+
+                // Magentas: keep purple/magenta tones
+                Some(Color::Magenta) | Some(Color::LightMagenta) => span.style.fg(Color::Magenta),
+
+                // Whites and Grays: dim to gray
                 Some(Color::White) => span.style.fg(Color::Gray),
                 Some(Color::Gray) => span.style.fg(Color::DarkGray),
+
+                // Default: use dark gray for unknown colors
                 _ => span.style.fg(Color::DarkGray),
             };
             Span::styled(span.content, dimmed_style.remove_modifier(Modifier::BOLD))
