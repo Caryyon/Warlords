@@ -30,6 +30,9 @@ pub struct GameUI {
 #[derive(Debug, Clone)]
 pub enum UIState {
     Welcome,
+    // Account states
+    Login(LoginState),
+    Signup(SignupState),
     MainMenu,
     CharacterCreation(CharacterCreationState),
     CharacterList(Vec<(String, chrono::DateTime<chrono::Utc>)>, Option<usize>), // characters, selected_index
@@ -42,6 +45,89 @@ pub enum UIState {
     DungeonExploration(DungeonExplorationState),
     Combat(CombatState),
     TacticalCombat(TacticalCombatState),
+    // Tutorial state
+    Tutorial(TutorialUIState),
+    // Warlord management
+    WarlordMenu(WarlordMenuState),
+}
+
+#[derive(Debug, Clone)]
+pub struct LoginState {
+    pub username: String,
+    pub password: String,
+    pub field: LoginField,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoginField {
+    Username,
+    Password,
+}
+
+impl LoginState {
+    pub fn new() -> Self {
+        LoginState {
+            username: String::new(),
+            password: String::new(),
+            field: LoginField::Username,
+            error_message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SignupState {
+    pub username: String,
+    pub password: String,
+    pub confirm_password: String,
+    pub field: SignupField,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SignupField {
+    Username,
+    Password,
+    ConfirmPassword,
+}
+
+impl SignupState {
+    pub fn new() -> Self {
+        SignupState {
+            username: String::new(),
+            password: String::new(),
+            confirm_password: String::new(),
+            field: SignupField::Username,
+            error_message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TutorialUIState {
+    pub tutorial_state: crate::tutorial::TutorialState,
+    pub village: crate::tutorial::TutorialVillage,
+    pub player_pos: (usize, usize),
+    pub showing_dialogue: bool,
+    pub dialogue_index: usize,
+    pub current_dialogue: Vec<crate::tutorial::TutorialMessage>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WarlordMenuState {
+    pub selected_tab: WarlordTab,
+    pub selected_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum WarlordTab {
+    Overview,
+    Followers,
+    Territories,
+    SpyNetwork,
+    Wars,
+    Advancement,
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +263,7 @@ pub enum PendingAction {
 #[derive(Debug, Clone)]
 pub struct CharacterCreationState {
     pub step: CreationStep,
+    pub selected_occupation: Option<crate::account::Occupation>,
     pub rolled_data: Option<RolledCharacteristics>,
     pub selected_race: Option<ForgeRace>,
     pub character_name: Option<String>,
@@ -255,6 +342,7 @@ pub enum EquipmentSlot {
 
 #[derive(Debug, Clone)]
 pub enum CreationStep {
+    OccupationSelection,  // NEW: Pick starting background
     Rolling,
     RaceSelection,
     NameEntry,
@@ -449,6 +537,8 @@ impl GameUI {
         self.terminal.draw(move |f| {
             match &state_clone {
                 UIState::Welcome => Self::draw_welcome_static(f),
+                UIState::Login(login_state) => Self::draw_login_static(f, login_state),
+                UIState::Signup(signup_state) => Self::draw_signup_static(f, signup_state),
                 UIState::MainMenu => Self::draw_main_menu_static(f, character_clone.as_ref()),
                 UIState::CharacterCreation(creation_state) => Self::draw_character_creation_static(f, creation_state, &input_clone),
                 UIState::CharacterList(character_list, selected_index) => Self::draw_character_list_static(f, Some(character_list), *selected_index),
@@ -468,6 +558,8 @@ impl GameUI {
                     f.render_widget(error_text, f.size());
                 },
                 UIState::TacticalCombat(tactical_state) => Self::draw_tactical_combat_static(f, tactical_state, character_clone.as_ref()),
+                UIState::Tutorial(tutorial_state) => Self::draw_tutorial_static(f, tutorial_state),
+                UIState::WarlordMenu(warlord_state) => Self::draw_warlord_menu_static(f, warlord_state, character_clone.as_ref()),
             }
         })?;
         Ok(())
@@ -806,8 +898,9 @@ impl GameUI {
     }
 
     fn draw_character_creation_static(f: &mut Frame, creation_state: &CharacterCreationState, input_buffer: &str) {
-        
+
         match creation_state.step {
+            CreationStep::OccupationSelection => Self::draw_occupation_selection_static(f, creation_state),
             CreationStep::Rolling => Self::draw_characteristic_rolling_static(f, creation_state),
             CreationStep::RaceSelection => Self::draw_race_selection_static(f),
             CreationStep::NameEntry => Self::draw_name_entry_static(f, creation_state, input_buffer),
@@ -816,6 +909,128 @@ impl GameUI {
             CreationStep::GearSelection => Self::draw_gear_selection_static(f, creation_state),
             CreationStep::Confirmation => Self::draw_character_confirmation_static(f, creation_state),
         }
+    }
+
+    fn draw_occupation_selection_static(f: &mut Frame, creation_state: &CharacterCreationState) {
+        use crate::account::Occupation;
+        let area = f.size();
+        let occupations = Occupation::all();
+        let theme = framework::UITheme::forge_theme();
+
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area);
+
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Min(0),
+                Constraint::Length(3),
+            ])
+            .split(chunks[0]);
+
+        // Title
+        let title_text = vec![
+            Line::from(vec![
+                Span::styled("THE CALL TO ADVENTURE", Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Who were you before destiny called?", Style::default()
+                    .fg(theme.text_secondary)
+                    .add_modifier(Modifier::ITALIC)),
+            ]),
+        ];
+
+        let title = Paragraph::new(title_text)
+            .alignment(Alignment::Center)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_accent)));
+        f.render_widget(title, left_chunks[0]);
+
+        // Occupation list
+        let mut occupation_lines: Vec<Line> = vec![
+            Line::from(Span::styled("Choose Your Former Life:", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from(""),
+        ];
+
+        for (i, occupation) in occupations.iter().enumerate() {
+            let style = if i == creation_state.current_selection_index {
+                Style::default().fg(theme.text_highlight).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            } else {
+                Style::default().fg(theme.text_primary)
+            };
+
+            let marker = if i == creation_state.current_selection_index { "▸ " } else { "  " };
+            occupation_lines.push(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(format!("{}. {}", i + 1, occupation.name()), style),
+            ]));
+        }
+
+        let occupation_list = Paragraph::new(occupation_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Your Past Life")
+                .border_style(Style::default().fg(theme.border_primary)))
+            .wrap(Wrap { trim: true });
+        f.render_widget(occupation_list, left_chunks[1]);
+
+        // Details panel (right side)
+        let selected_occupation = occupations.get(creation_state.current_selection_index);
+        let details_text = if let Some(occupation) = selected_occupation {
+            let skills = occupation.starting_skills();
+            let mut details = vec![
+                Line::from(Span::styled(occupation.name(), Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD))),
+                Line::from(""),
+                Line::from(Span::styled(occupation.description(), Style::default()
+                    .fg(theme.text_secondary)
+                    .add_modifier(Modifier::ITALIC))),
+                Line::from(""),
+                Line::from(Span::styled("Starting Village:", Style::default().add_modifier(Modifier::BOLD))),
+                Line::from(format!("  {}", occupation.village_name())),
+                Line::from(""),
+                Line::from(Span::styled("Starting Skills:", Style::default().add_modifier(Modifier::BOLD))),
+            ];
+
+            for (skill, value) in skills {
+                details.push(Line::from(format!("  {} +{}%", skill, value)));
+            }
+
+            if occupation.starting_gold_bonus() > 0 {
+                details.push(Line::from(""));
+                details.push(Line::from(format!("Gold Bonus: +{}", occupation.starting_gold_bonus())));
+            }
+
+            details
+        } else {
+            vec![Line::from("Select an occupation to see details")]
+        };
+
+        let details_panel = Paragraph::new(details_text)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Details")
+                .border_style(Style::default().fg(theme.info)))
+            .wrap(Wrap { trim: true });
+        f.render_widget(details_panel, chunks[1]);
+
+        // Navigation
+        let nav_text = "↑↓/WS: Select | ENTER: Confirm | 1-9: Quick Select | ESC: Cancel";
+        let navigation = Paragraph::new(nav_text)
+            .style(Style::default().fg(theme.text_secondary))
+            .alignment(Alignment::Center)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_primary)));
+        f.render_widget(navigation, left_chunks[2]);
     }
 
     fn draw_characteristic_rolling_static(f: &mut Frame, creation_state: &CharacterCreationState) {
@@ -1723,7 +1938,7 @@ impl GameUI {
             f.render_widget(combat_panel, right_chunks[1]);
 
             // Controls
-            let controls = Paragraph::new("I: Inventory | E: Equipment | C: Character Sheet | ESC/M: Return to Game | Q/Ctrl+C: Quit")
+            let controls = Paragraph::new("I: Inventory | E: Equipment | C: Character Sheet | W: Warlord | ESC/M: Return | Q: Quit")
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL).title("Controls").border_style(Style::default().fg(Color::DarkGray)));
@@ -4628,6 +4843,573 @@ impl GameUI {
             .wrap(ratatui::widgets::Wrap { trim: true });
 
         f.render_widget(panel, area);
+    }
+
+    // Login screen
+    fn draw_login_static(f: &mut Frame, login_state: &LoginState) {
+        let area = f.size();
+        let theme = framework::UITheme::forge_theme();
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(8),
+                Constraint::Min(0),
+                Constraint::Length(3),
+            ])
+            .split(area);
+
+        // Title
+        let title_art = vec![
+            "██╗      ██████╗  ██████╗ ██╗███╗   ██╗",
+            "██║     ██╔═══██╗██╔════╝ ██║████╗  ██║",
+            "██║     ██║   ██║██║  ███╗██║██╔██╗ ██║",
+            "██║     ██║   ██║██║   ██║██║██║╚██╗██║",
+            "███████╗╚██████╔╝╚██████╔╝██║██║ ╚████║",
+            "╚══════╝ ╚═════╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝",
+        ];
+
+        let title_lines: Vec<Line> = title_art.iter()
+            .map(|line| Line::from(Span::styled(*line, Style::default().fg(theme.accent))))
+            .collect();
+
+        let title = Paragraph::new(title_lines)
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.border_accent)));
+        f.render_widget(title, chunks[0]);
+
+        // Login form
+        let form_area = layout::LayoutManager::default().centered_modal(50, 50, chunks[1]);
+
+        let form_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ])
+            .split(form_area);
+
+        // Username field
+        let username_style = if login_state.field == LoginField::Username {
+            Style::default().fg(theme.text_highlight).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.text_primary)
+        };
+
+        let username_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Username")
+            .border_style(if login_state.field == LoginField::Username {
+                Style::default().fg(theme.accent)
+            } else {
+                Style::default().fg(theme.border_primary)
+            });
+
+        let username_field = Paragraph::new(login_state.username.as_str())
+            .style(username_style)
+            .block(username_block);
+        f.render_widget(username_field, form_chunks[0]);
+
+        // Password field
+        let password_style = if login_state.field == LoginField::Password {
+            Style::default().fg(theme.text_highlight).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.text_primary)
+        };
+
+        let password_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Password")
+            .border_style(if login_state.field == LoginField::Password {
+                Style::default().fg(theme.accent)
+            } else {
+                Style::default().fg(theme.border_primary)
+            });
+
+        let masked_password = "*".repeat(login_state.password.len());
+        let password_field = Paragraph::new(masked_password)
+            .style(password_style)
+            .block(password_block);
+        f.render_widget(password_field, form_chunks[1]);
+
+        // Error message
+        if let Some(ref error) = login_state.error_message {
+            let error_text = Paragraph::new(error.as_str())
+                .style(Style::default().fg(theme.error))
+                .alignment(Alignment::Center);
+            f.render_widget(error_text, form_chunks[2]);
+        }
+
+        // Navigation
+        let nav = Paragraph::new("TAB: Switch Field | ENTER: Login | S: Sign Up | ESC: Back")
+            .style(Style::default().fg(theme.text_secondary))
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.border_primary)));
+        f.render_widget(nav, chunks[2]);
+    }
+
+    // Signup screen
+    fn draw_signup_static(f: &mut Frame, signup_state: &SignupState) {
+        let area = f.size();
+        let theme = framework::UITheme::forge_theme();
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Min(0),
+                Constraint::Length(3),
+            ])
+            .split(area);
+
+        // Title
+        let title = Paragraph::new(vec![
+            Line::from(Span::styled("CREATE ACCOUNT", Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(Span::styled("Join the adventure!", Style::default().fg(theme.text_secondary))),
+        ])
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.border_accent)));
+        f.render_widget(title, chunks[0]);
+
+        // Signup form
+        let form_area = layout::LayoutManager::default().centered_modal(50, 60, chunks[1]);
+
+        let form_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ])
+            .split(form_area);
+
+        // Username field
+        let username_style = if signup_state.field == SignupField::Username {
+            Style::default().fg(theme.text_highlight).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.text_primary)
+        };
+
+        let username_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Username (3-20 chars)")
+            .border_style(if signup_state.field == SignupField::Username {
+                Style::default().fg(theme.accent)
+            } else {
+                Style::default().fg(theme.border_primary)
+            });
+
+        let username_field = Paragraph::new(signup_state.username.as_str())
+            .style(username_style)
+            .block(username_block);
+        f.render_widget(username_field, form_chunks[0]);
+
+        // Password field
+        let password_style = if signup_state.field == SignupField::Password {
+            Style::default().fg(theme.text_highlight).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.text_primary)
+        };
+
+        let password_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Password (4+ chars)")
+            .border_style(if signup_state.field == SignupField::Password {
+                Style::default().fg(theme.accent)
+            } else {
+                Style::default().fg(theme.border_primary)
+            });
+
+        let masked_password = "*".repeat(signup_state.password.len());
+        let password_field = Paragraph::new(masked_password)
+            .style(password_style)
+            .block(password_block);
+        f.render_widget(password_field, form_chunks[1]);
+
+        // Confirm password field
+        let confirm_style = if signup_state.field == SignupField::ConfirmPassword {
+            Style::default().fg(theme.text_highlight).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.text_primary)
+        };
+
+        let confirm_block = Block::default()
+            .borders(Borders::ALL)
+            .title("Confirm Password")
+            .border_style(if signup_state.field == SignupField::ConfirmPassword {
+                Style::default().fg(theme.accent)
+            } else {
+                Style::default().fg(theme.border_primary)
+            });
+
+        let masked_confirm = "*".repeat(signup_state.confirm_password.len());
+        let confirm_field = Paragraph::new(masked_confirm)
+            .style(confirm_style)
+            .block(confirm_block);
+        f.render_widget(confirm_field, form_chunks[2]);
+
+        // Error message
+        if let Some(ref error) = signup_state.error_message {
+            let error_text = Paragraph::new(error.as_str())
+                .style(Style::default().fg(theme.error))
+                .alignment(Alignment::Center);
+            f.render_widget(error_text, form_chunks[3]);
+        }
+
+        // Navigation
+        let nav = Paragraph::new("TAB: Switch Field | ENTER: Create Account | ESC: Back")
+            .style(Style::default().fg(theme.text_secondary))
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(theme.border_primary)));
+        f.render_widget(nav, chunks[2]);
+    }
+
+    // Tutorial screen
+    fn draw_tutorial_static(f: &mut Frame, tutorial_ui_state: &TutorialUIState) {
+        use crate::tutorial::{TutorialStage, MessageType};
+        let area = f.size();
+        let theme = framework::UITheme::forge_theme();
+
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(area);
+
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(0),
+                Constraint::Length(8),
+            ])
+            .split(chunks[0]);
+
+        // Draw village map
+        let village = &tutorial_ui_state.village;
+        let mut map_lines: Vec<Line> = Vec::new();
+
+        for (y, row) in village.tiles.iter().enumerate() {
+            let mut spans: Vec<Span> = Vec::new();
+            for (x, tile) in row.iter().enumerate() {
+                let (ch, color) = if (x, y) == tutorial_ui_state.player_pos {
+                    ('@', theme.text_highlight)
+                } else if village.npcs.iter().any(|npc| npc.position == (x, y)) {
+                    ('P', theme.warning)
+                } else {
+                    let color = match tile {
+                        crate::tutorial::TutorialTile::Grass => theme.success,
+                        crate::tutorial::TutorialTile::Path => Color::Rgb(139, 119, 101),
+                        crate::tutorial::TutorialTile::Wall => theme.text_secondary,
+                        crate::tutorial::TutorialTile::Door => Color::Rgb(139, 69, 19),
+                        crate::tutorial::TutorialTile::Water => theme.info,
+                        crate::tutorial::TutorialTile::Tree => Color::Rgb(34, 139, 34),
+                        crate::tutorial::TutorialTile::Building => theme.text_secondary,
+                        crate::tutorial::TutorialTile::WorkArea => theme.accent,
+                    };
+                    (tile.char(), color)
+                };
+                spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+            }
+            map_lines.push(Line::from(spans));
+        }
+
+        let map = Paragraph::new(map_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Village of {}", tutorial_ui_state.tutorial_state.village_name))
+                .border_style(Style::default().fg(theme.border_accent)));
+        f.render_widget(map, left_chunks[0]);
+
+        // Dialogue box
+        let dialogue = &tutorial_ui_state.current_dialogue;
+        let mut dialogue_lines: Vec<Line> = Vec::new();
+
+        if tutorial_ui_state.showing_dialogue && tutorial_ui_state.dialogue_index < dialogue.len() {
+            let msg = &dialogue[tutorial_ui_state.dialogue_index];
+            let style = match msg.message_type {
+                MessageType::Narration => Style::default().fg(theme.text_primary).add_modifier(Modifier::ITALIC),
+                MessageType::Dialogue => Style::default().fg(theme.info),
+                MessageType::Thought => Style::default().fg(theme.text_secondary).add_modifier(Modifier::ITALIC),
+                MessageType::Tutorial => Style::default().fg(theme.warning).add_modifier(Modifier::BOLD),
+                MessageType::Action => Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+            };
+
+            if let Some(ref speaker) = msg.speaker {
+                dialogue_lines.push(Line::from(Span::styled(
+                    format!("{}:", speaker),
+                    Style::default().fg(theme.text_highlight).add_modifier(Modifier::BOLD),
+                )));
+            }
+            dialogue_lines.push(Line::from(Span::styled(&msg.text, style)));
+            dialogue_lines.push(Line::from(""));
+            dialogue_lines.push(Line::from(Span::styled(
+                "Press SPACE to continue...",
+                Style::default().fg(theme.text_secondary),
+            )));
+        } else if let Some(hint) = tutorial_ui_state.tutorial_state.get_tutorial_hint() {
+            dialogue_lines.push(Line::from(Span::styled(hint, Style::default().fg(theme.warning))));
+        }
+
+        let dialogue_box = Paragraph::new(dialogue_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Story")
+                .border_style(Style::default().fg(theme.info)))
+            .wrap(Wrap { trim: true });
+        f.render_widget(dialogue_box, left_chunks[1]);
+
+        // Right panel - status
+        let stage_name = match tutorial_ui_state.tutorial_state.stage {
+            TutorialStage::DailyLife => "Daily Life",
+            TutorialStage::Unease => "Something's Wrong",
+            TutorialStage::Incident => "The Incident",
+            TutorialStage::MovementLesson => "Learning to Move",
+            TutorialStage::NPCInteraction => "Speaking with Others",
+            TutorialStage::TheCall => "The Call",
+            TutorialStage::FirstCombat => "First Blood",
+            TutorialStage::Farewell => "Goodbye",
+            TutorialStage::Departure => "The Journey Begins",
+            TutorialStage::Complete => "Tutorial Complete",
+        };
+
+        let status_text = vec![
+            Line::from(Span::styled("TUTORIAL", Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(Span::styled("Stage:", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from(stage_name),
+            Line::from(""),
+            Line::from(Span::styled("Progress:", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from(format!("Moved: {}", if tutorial_ui_state.tutorial_state.has_moved { "✓" } else { "✗" })),
+            Line::from(format!("Talked: {}", if tutorial_ui_state.tutorial_state.has_talked { "✓" } else { "✗" })),
+            Line::from(format!("Fought: {}", if tutorial_ui_state.tutorial_state.has_fought { "✓" } else { "✗" })),
+            Line::from(""),
+            Line::from(Span::styled("Controls:", Style::default().add_modifier(Modifier::BOLD))),
+            Line::from("WASD: Move"),
+            Line::from("ENTER: Interact"),
+            Line::from("SPACE: Continue dialogue"),
+            Line::from("ESC: Skip tutorial"),
+        ];
+
+        let status_panel = Paragraph::new(status_text)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Status")
+                .border_style(Style::default().fg(theme.border_primary)))
+            .wrap(Wrap { trim: true });
+        f.render_widget(status_panel, chunks[1]);
+    }
+
+    // Warlord menu screen
+    fn draw_warlord_menu_static(f: &mut Frame, warlord_state: &WarlordMenuState, _character: Option<&crate::forge::ForgeCharacter>) {
+        let area = f.size();
+        let theme = framework::UITheme::forge_theme();
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Min(0),
+                Constraint::Length(3),
+            ])
+            .split(area);
+
+        // Title with current tier
+        let title_text = vec![
+            Line::from(vec![
+                Span::styled("WARLORD COMMAND", Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Current Tier: ", Style::default().fg(theme.text_secondary)),
+                Span::styled("Adventurer", Style::default()
+                    .fg(theme.text_highlight)
+                    .add_modifier(Modifier::BOLD)),
+            ]),
+        ];
+
+        let title = Paragraph::new(title_text)
+            .alignment(Alignment::Center)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_accent)));
+        f.render_widget(title, chunks[0]);
+
+        // Tab bar and content
+        let main_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(20), Constraint::Min(0)])
+            .split(chunks[1]);
+
+        // Tab list
+        let tabs = vec![
+            ("Overview", WarlordTab::Overview),
+            ("Followers", WarlordTab::Followers),
+            ("Territories", WarlordTab::Territories),
+            ("Spy Network", WarlordTab::SpyNetwork),
+            ("Wars", WarlordTab::Wars),
+            ("Advancement", WarlordTab::Advancement),
+        ];
+
+        let mut tab_lines: Vec<ListItem> = Vec::new();
+        for (name, tab) in &tabs {
+            let style = if *tab == warlord_state.selected_tab {
+                Style::default().fg(theme.text_highlight).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            } else {
+                Style::default().fg(theme.text_primary)
+            };
+            tab_lines.push(ListItem::new(Line::from(Span::styled(*name, style))));
+        }
+
+        let tab_list = List::new(tab_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Menu")
+                .border_style(Style::default().fg(theme.border_primary)));
+        f.render_widget(tab_list, main_chunks[0]);
+
+        // Content based on selected tab
+        let content = match warlord_state.selected_tab {
+            WarlordTab::Overview => vec![
+                Line::from(Span::styled("WARLORD STATUS", Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD))),
+                Line::from(""),
+                Line::from("Current Tier: Adventurer"),
+                Line::from("Title: Wandering Hero"),
+                Line::from(""),
+                Line::from("Reputation: 0"),
+                Line::from("Infamy: 0"),
+                Line::from(""),
+                Line::from("Followers: 0/0"),
+                Line::from("Territories: 0"),
+                Line::from(""),
+                Line::from("Monthly Income: 0 gold"),
+                Line::from("Monthly Expenses: 0 gold"),
+                Line::from(""),
+                Line::from(Span::styled("Tip: Complete quests and defeat enemies to", Style::default().fg(theme.text_secondary))),
+                Line::from(Span::styled("gain reputation and advance to Captain tier.", Style::default().fg(theme.text_secondary))),
+            ],
+            WarlordTab::Followers => vec![
+                Line::from(Span::styled("FOLLOWERS", Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD))),
+                Line::from(""),
+                Line::from(Span::styled("No followers yet.", Style::default().fg(theme.text_secondary))),
+                Line::from(""),
+                Line::from("Advance to Captain tier to recruit followers."),
+                Line::from(""),
+                Line::from("Follower Types:"),
+                Line::from("• Peasant Levy - Cheap but weak"),
+                Line::from("• Militia - Basic trained soldiers"),
+                Line::from("• Soldier - Professional fighters"),
+                Line::from("• Veteran - Experienced warriors"),
+                Line::from("• Elite Guard - Your best troops"),
+                Line::from(""),
+                Line::from("Specialists:"),
+                Line::from("• Scouts - Explore and gather intel"),
+                Line::from("• Healers - Keep your troops alive"),
+                Line::from("• Archers - Ranged support"),
+                Line::from("• Cavalry - Fast and powerful"),
+            ],
+            WarlordTab::Territories => vec![
+                Line::from(Span::styled("TERRITORIES", Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD))),
+                Line::from(""),
+                Line::from(Span::styled("No territories controlled.", Style::default().fg(theme.text_secondary))),
+                Line::from(""),
+                Line::from("Advance to Warlord tier to claim territories."),
+                Line::from(""),
+                Line::from("Territory Types:"),
+                Line::from("• Camp - Temporary base (Captain)"),
+                Line::from("• Village - Small settlement (Warlord)"),
+                Line::from("• Town - Medium settlement (Warlord)"),
+                Line::from("• City - Large settlement (Lord)"),
+                Line::from("• Castle - Military stronghold (Lord)"),
+                Line::from("• Fortress - Ultimate defense (Lord)"),
+            ],
+            WarlordTab::SpyNetwork => vec![
+                Line::from(Span::styled("SPY NETWORK", Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD))),
+                Line::from(""),
+                Line::from(Span::styled("Spy network not established.", Style::default().fg(theme.text_secondary))),
+                Line::from(""),
+                Line::from("Advance to Warlord tier to establish"),
+                Line::from("your spy network."),
+                Line::from(""),
+                Line::from("Operations:"),
+                Line::from("• Gather Intel - Learn enemy secrets"),
+                Line::from("• Sabotage - Weaken enemy defenses"),
+                Line::from("• Bribery - Turn enemies to your side"),
+                Line::from("• Counterintelligence - Protect yourself"),
+            ],
+            WarlordTab::Wars => vec![
+                Line::from(Span::styled("WARS & CONFLICTS", Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD))),
+                Line::from(""),
+                Line::from(Span::styled("No active wars.", Style::default().fg(theme.text_secondary))),
+                Line::from(""),
+                Line::from("As you grow in power, rival factions"),
+                Line::from("will challenge your dominion."),
+                Line::from(""),
+                Line::from("War Score:"),
+                Line::from("• Win battles to increase war score"),
+                Line::from("• Capture territory for major gains"),
+                Line::from("• Force surrender when score is high"),
+            ],
+            WarlordTab::Advancement => vec![
+                Line::from(Span::styled("TIER ADVANCEMENT", Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD))),
+                Line::from(""),
+                Line::from(Span::styled("Current: Adventurer", Style::default()
+                    .fg(theme.text_highlight))),
+                Line::from(Span::styled("Next: Captain", Style::default()
+                    .fg(theme.warning))),
+                Line::from(""),
+                Line::from("Requirements for Captain:"),
+                Line::from("• Reputation: 0/100"),
+                Line::from("• Gold: 0/500"),
+                Line::from("• Quests Completed: 0/5"),
+                Line::from("• Special: Establish a base camp"),
+                Line::from(""),
+                Line::from(Span::styled("Progress: Not Ready", Style::default().fg(theme.error))),
+                Line::from(""),
+                Line::from("Tier Benefits:"),
+                Line::from("• Captain: Recruit up to 10 followers"),
+                Line::from("• Warlord: Control territories, spy network"),
+                Line::from("• Lord: Multiple cities, noble title"),
+            ],
+        };
+
+        let content_panel = Paragraph::new(content)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Details")
+                .border_style(Style::default().fg(theme.info)))
+            .wrap(Wrap { trim: true });
+        f.render_widget(content_panel, main_chunks[1]);
+
+        // Navigation
+        let nav = Paragraph::new("↑↓: Select Tab | ENTER: View Details | ESC: Back to Game")
+            .style(Style::default().fg(theme.text_secondary))
+            .alignment(Alignment::Center)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_primary)));
+        f.render_widget(nav, chunks[2]);
     }
 }
 

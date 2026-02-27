@@ -243,6 +243,7 @@ pub struct Game {
     ui: GameUI,
     state: UIState,
     state_manager: crate::state::GameStateManager,
+    account_manager: crate::account::AccountManager,
     current_character: Option<ForgeCharacter>,
     input_buffer: String,
     world_manager: Option<WorldManager>,
@@ -257,6 +258,7 @@ impl Game {
     pub fn new() -> anyhow::Result<Self> {
         let ui = GameUI::new()?;
         let state_manager = crate::state::GameStateManager::new(".")?;
+        let account_manager = crate::account::AccountManager::new()?;
         let key_bindings = KeyBindings::new();
 
         // Check for key binding conflicts at startup
@@ -266,6 +268,7 @@ impl Game {
             ui,
             state: UIState::Welcome,
             state_manager,
+            account_manager,
             current_character: None,
             input_buffer: String::new(),
             world_manager: None,
@@ -382,7 +385,8 @@ impl Game {
                         KeyCode::Char('2') => {
                             // Create New Character -> start character creation
                             self.state = UIState::CharacterCreation(crate::ui::CharacterCreationState {
-                                step: crate::ui::CreationStep::Rolling,
+                                step: crate::ui::CreationStep::OccupationSelection,
+                                selected_occupation: None,
                                 rolled_data: None,
                                 selected_race: None,
                                 character_name: None,
@@ -493,6 +497,13 @@ impl Game {
                         // Open character sheet
                         self.state = UIState::CharacterSheet;
                     }
+                    KeyCode::Char('w') => {
+                        // Open warlord management
+                        self.state = UIState::WarlordMenu(crate::ui::WarlordMenuState {
+                            selected_tab: crate::ui::WarlordTab::Overview,
+                            selected_index: 0,
+                        });
+                    }
                     KeyCode::Char('q') => {
                         return Ok(true); // Exit
                     }
@@ -520,6 +531,18 @@ impl Game {
             }
             UIState::TacticalCombat(tactical_state) => {
                 self.handle_tactical_combat_input(key, tactical_state.clone())?;
+            }
+            UIState::Login(login_state) => {
+                self.handle_login_input(key, login_state.clone())?;
+            }
+            UIState::Signup(signup_state) => {
+                self.handle_signup_input(key, signup_state.clone())?;
+            }
+            UIState::Tutorial(tutorial_state) => {
+                self.handle_tutorial_input(key, tutorial_state.clone())?;
+            }
+            UIState::WarlordMenu(warlord_state) => {
+                self.handle_warlord_menu_input(key, warlord_state.clone())?;
             }
         }
         Ok(false)
@@ -602,7 +625,8 @@ impl Game {
         match button_id {
             "create" => {
                 self.state = UIState::CharacterCreation(crate::ui::CharacterCreationState {
-                    step: crate::ui::CreationStep::Rolling,
+                    step: crate::ui::CreationStep::OccupationSelection,
+                    selected_occupation: None,
                     rolled_data: None,
                     selected_race: None,
                     character_name: None,
@@ -686,6 +710,50 @@ impl Game {
 
     fn handle_character_creation_input(&mut self, key: KeyEvent, mut creation_state: CharacterCreationState) -> anyhow::Result<()> {
         match creation_state.step {
+            CreationStep::OccupationSelection => {
+                use crate::account::Occupation;
+                let occupations = Occupation::all();
+
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') => {
+                        if creation_state.current_selection_index > 0 {
+                            creation_state.current_selection_index -= 1;
+                        } else {
+                            creation_state.current_selection_index = occupations.len() - 1;
+                        }
+                        self.state = UIState::CharacterCreation(creation_state);
+                    }
+                    KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') => {
+                        creation_state.current_selection_index = (creation_state.current_selection_index + 1) % occupations.len();
+                        self.state = UIState::CharacterCreation(creation_state);
+                    }
+                    KeyCode::Enter => {
+                        if creation_state.current_selection_index < occupations.len() {
+                            let occupation = occupations[creation_state.current_selection_index].clone();
+                            creation_state.starting_gold = 100 + occupation.starting_gold_bonus();
+                            creation_state.selected_occupation = Some(occupation);
+                            creation_state.current_selection_index = 0;
+                            creation_state.step = CreationStep::Rolling;
+                            self.state = UIState::CharacterCreation(creation_state);
+                        }
+                    }
+                    KeyCode::Char(c @ '1'..='9') => {
+                        let idx = c.to_digit(10).unwrap_or(1) as usize - 1;
+                        if idx < occupations.len() {
+                            let occupation = occupations[idx].clone();
+                            creation_state.starting_gold = 100 + occupation.starting_gold_bonus();
+                            creation_state.selected_occupation = Some(occupation);
+                            creation_state.current_selection_index = 0;
+                            creation_state.step = CreationStep::Rolling;
+                            self.state = UIState::CharacterCreation(creation_state);
+                        }
+                    }
+                    KeyCode::Esc => {
+                        self.state = UIState::MainMenu;
+                    }
+                    _ => {}
+                }
+            }
             CreationStep::Rolling => {
                 match key.code {
                     KeyCode::Enter | KeyCode::Char('r') => {
@@ -900,10 +968,11 @@ impl Game {
                 match key.code {
                     KeyCode::Enter => {
                         // Finalize character creation
-                        if let (Some(rolled_data), Some(race), Some(name)) = (
+                        if let (Some(rolled_data), Some(race), Some(name), Some(occupation)) = (
                             &creation_state.rolled_data,
                             &creation_state.selected_race,
                             &creation_state.character_name,
+                            &creation_state.selected_occupation,
                         ) {
                             let characteristics = ForgeCharacterCreation::apply_racial_modifiers(rolled_data, race);
                             let mut character = ForgeCharacterCreation::create_character(
@@ -911,16 +980,36 @@ impl Game {
                                 characteristics,
                                 race.clone(),
                             );
-                            
+
+                            // Apply occupation starting skills
+                            for (skill_name, skill_value) in occupation.starting_skills() {
+                                character.skills.insert(skill_name.to_string(), skill_value);
+                            }
+                            // Apply occupation gold bonus
+                            character.gold = creation_state.starting_gold;
+
                             // Apply selected skills, spells, and gear
                             self.apply_character_selections(&mut character, &creation_state);
 
                             match self.state_manager.create_character(character.clone()) {
                                 Ok(()) => {
-                                    // Return to character list after creation
-                                    let character_list = self.state_manager.list_characters()?;
-                                    let selected_index = if character_list.is_empty() { None } else { Some(0) };
-                                    self.state = UIState::CharacterList(character_list, selected_index);
+                                    // Set as current character
+                                    self.current_character = Some(character);
+
+                                    // Start the tutorial!
+                                    let tutorial_state = crate::tutorial::TutorialState::new(occupation.clone());
+                                    let village = crate::tutorial::TutorialVillage::generate(occupation);
+                                    let player_pos = village.player_start;
+                                    let current_dialogue = tutorial_state.get_current_dialogue();
+
+                                    self.state = UIState::Tutorial(crate::ui::TutorialUIState {
+                                        tutorial_state,
+                                        village,
+                                        player_pos,
+                                        showing_dialogue: !current_dialogue.is_empty(),
+                                        dialogue_index: 0,
+                                        current_dialogue,
+                                    });
                                 }
                                 Err(_) => {
                                     // Show error - character already exists
@@ -1262,7 +1351,8 @@ impl Game {
             KeyCode::Char('c') | KeyCode::Char('n') => {
                 // Create new character
                 self.state = UIState::CharacterCreation(crate::ui::CharacterCreationState {
-                    step: crate::ui::CreationStep::Rolling,
+                    step: crate::ui::CreationStep::OccupationSelection,
+                    selected_occupation: None,
                     rolled_data: None,
                     selected_race: None,
                     character_name: None,
@@ -5174,6 +5264,273 @@ impl Game {
             })
             .cloned()
             .collect()
+    }
+
+    fn handle_login_input(&mut self, key: KeyEvent, mut login_state: crate::ui::LoginState) -> anyhow::Result<()> {
+        use crate::ui::LoginField;
+
+        match key.code {
+            KeyCode::Tab => {
+                login_state.field = match login_state.field {
+                    LoginField::Username => LoginField::Password,
+                    LoginField::Password => LoginField::Username,
+                };
+                self.state = UIState::Login(login_state);
+            }
+            KeyCode::Enter => {
+                // Attempt login
+                match self.account_manager.login(&login_state.username, &login_state.password) {
+                    Ok(()) => {
+                        // Login successful, go to character list
+                        let character_list = self.state_manager.list_characters()?;
+                        let selected_index = if character_list.is_empty() { None } else { Some(0) };
+                        self.state = UIState::CharacterList(character_list, selected_index);
+                    }
+                    Err(e) => {
+                        login_state.error_message = Some(e.to_string());
+                        self.state = UIState::Login(login_state);
+                    }
+                }
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') if login_state.field == LoginField::Username && login_state.username.is_empty() => {
+                // Go to signup
+                self.state = UIState::Signup(crate::ui::SignupState::new());
+            }
+            KeyCode::Char(c) => {
+                match login_state.field {
+                    LoginField::Username => login_state.username.push(c),
+                    LoginField::Password => login_state.password.push(c),
+                }
+                self.state = UIState::Login(login_state);
+            }
+            KeyCode::Backspace => {
+                match login_state.field {
+                    LoginField::Username => { login_state.username.pop(); }
+                    LoginField::Password => { login_state.password.pop(); }
+                }
+                self.state = UIState::Login(login_state);
+            }
+            KeyCode::Esc => {
+                self.state = UIState::Welcome;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_signup_input(&mut self, key: KeyEvent, mut signup_state: crate::ui::SignupState) -> anyhow::Result<()> {
+        use crate::ui::SignupField;
+
+        match key.code {
+            KeyCode::Tab => {
+                signup_state.field = match signup_state.field {
+                    SignupField::Username => SignupField::Password,
+                    SignupField::Password => SignupField::ConfirmPassword,
+                    SignupField::ConfirmPassword => SignupField::Username,
+                };
+                self.state = UIState::Signup(signup_state);
+            }
+            KeyCode::Enter => {
+                // Validate and attempt signup
+                if signup_state.password != signup_state.confirm_password {
+                    signup_state.error_message = Some("Passwords do not match".to_string());
+                    self.state = UIState::Signup(signup_state);
+                } else {
+                    match self.account_manager.signup(&signup_state.username, &signup_state.password) {
+                        Ok(()) => {
+                            // Signup successful, go to character list
+                            let character_list = self.state_manager.list_characters()?;
+                            let selected_index = if character_list.is_empty() { None } else { Some(0) };
+                            self.state = UIState::CharacterList(character_list, selected_index);
+                        }
+                        Err(e) => {
+                            signup_state.error_message = Some(e.to_string());
+                            self.state = UIState::Signup(signup_state);
+                        }
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                match signup_state.field {
+                    SignupField::Username => signup_state.username.push(c),
+                    SignupField::Password => signup_state.password.push(c),
+                    SignupField::ConfirmPassword => signup_state.confirm_password.push(c),
+                }
+                self.state = UIState::Signup(signup_state);
+            }
+            KeyCode::Backspace => {
+                match signup_state.field {
+                    SignupField::Username => { signup_state.username.pop(); }
+                    SignupField::Password => { signup_state.password.pop(); }
+                    SignupField::ConfirmPassword => { signup_state.confirm_password.pop(); }
+                }
+                self.state = UIState::Signup(signup_state);
+            }
+            KeyCode::Esc => {
+                self.state = UIState::Login(crate::ui::LoginState::new());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_tutorial_input(&mut self, key: KeyEvent, mut tutorial_ui_state: crate::ui::TutorialUIState) -> anyhow::Result<()> {
+        use crate::tutorial::TutorialStage;
+
+        let mut should_exit_to_world = false;
+
+        if tutorial_ui_state.showing_dialogue {
+            // Handle dialogue advancement
+            match key.code {
+                KeyCode::Char(' ') | KeyCode::Enter => {
+                    tutorial_ui_state.dialogue_index += 1;
+                    if tutorial_ui_state.dialogue_index >= tutorial_ui_state.current_dialogue.len() {
+                        tutorial_ui_state.showing_dialogue = false;
+                        tutorial_ui_state.dialogue_index = 0;
+                        // Try to advance the tutorial stage
+                        tutorial_ui_state.tutorial_state.advance_stage();
+                        tutorial_ui_state.current_dialogue = tutorial_ui_state.tutorial_state.get_current_dialogue();
+                        if !tutorial_ui_state.current_dialogue.is_empty() {
+                            tutorial_ui_state.showing_dialogue = true;
+                        }
+                    }
+                }
+                KeyCode::Esc => {
+                    should_exit_to_world = true;
+                }
+                _ => {}
+            }
+        } else {
+            // Handle movement and interaction
+            match key.code {
+                KeyCode::Char('w') | KeyCode::Up => {
+                    let (x, y) = tutorial_ui_state.player_pos;
+                    if y > 0 {
+                        let new_pos = (x, y - 1);
+                        if tutorial_ui_state.village.tiles[new_pos.1][new_pos.0].is_walkable() {
+                            tutorial_ui_state.player_pos = new_pos;
+                            tutorial_ui_state.tutorial_state.mark_moved();
+                        }
+                    }
+                }
+                KeyCode::Char('s') | KeyCode::Down => {
+                    let (x, y) = tutorial_ui_state.player_pos;
+                    if y < tutorial_ui_state.village.height - 1 {
+                        let new_pos = (x, y + 1);
+                        if tutorial_ui_state.village.tiles[new_pos.1][new_pos.0].is_walkable() {
+                            tutorial_ui_state.player_pos = new_pos;
+                            tutorial_ui_state.tutorial_state.mark_moved();
+                        }
+                    }
+                }
+                KeyCode::Char('a') | KeyCode::Left => {
+                    let (x, y) = tutorial_ui_state.player_pos;
+                    if x > 0 {
+                        let new_pos = (x - 1, y);
+                        if tutorial_ui_state.village.tiles[new_pos.1][new_pos.0].is_walkable() {
+                            tutorial_ui_state.player_pos = new_pos;
+                            tutorial_ui_state.tutorial_state.mark_moved();
+                        }
+                    }
+                }
+                KeyCode::Char('d') | KeyCode::Right => {
+                    let (x, y) = tutorial_ui_state.player_pos;
+                    if x < tutorial_ui_state.village.width - 1 {
+                        let new_pos = (x + 1, y);
+                        if tutorial_ui_state.village.tiles[new_pos.1][new_pos.0].is_walkable() {
+                            tutorial_ui_state.player_pos = new_pos;
+                            tutorial_ui_state.tutorial_state.mark_moved();
+                        }
+                    }
+                }
+                KeyCode::Enter => {
+                    // Check for NPC interaction
+                    let (px, py) = tutorial_ui_state.player_pos;
+                    let adjacent_npc = tutorial_ui_state.village.npcs.iter().any(|npc| {
+                        let (nx, ny) = npc.position;
+                        let dx = (px as i32 - nx as i32).abs();
+                        let dy = (py as i32 - ny as i32).abs();
+                        dx <= 1 && dy <= 1 && (dx + dy) <= 1
+                    });
+
+                    if adjacent_npc {
+                        tutorial_ui_state.tutorial_state.mark_talked();
+                        tutorial_ui_state.current_dialogue = tutorial_ui_state.tutorial_state.get_current_dialogue();
+                        if !tutorial_ui_state.current_dialogue.is_empty() {
+                            tutorial_ui_state.showing_dialogue = true;
+                        }
+                    }
+                }
+                KeyCode::Esc => {
+                    should_exit_to_world = true;
+                }
+                _ => {}
+            }
+
+            // Check for stage completion based on actions
+            let stage = tutorial_ui_state.tutorial_state.stage;
+            if stage == TutorialStage::MovementLesson && tutorial_ui_state.tutorial_state.has_moved {
+                tutorial_ui_state.tutorial_state.advance_stage();
+                tutorial_ui_state.current_dialogue = tutorial_ui_state.tutorial_state.get_current_dialogue();
+                if !tutorial_ui_state.current_dialogue.is_empty() {
+                    tutorial_ui_state.showing_dialogue = true;
+                }
+            } else if stage == TutorialStage::NPCInteraction && tutorial_ui_state.tutorial_state.has_talked {
+                tutorial_ui_state.tutorial_state.advance_stage();
+                tutorial_ui_state.current_dialogue = tutorial_ui_state.tutorial_state.get_current_dialogue();
+                if !tutorial_ui_state.current_dialogue.is_empty() {
+                    tutorial_ui_state.showing_dialogue = true;
+                }
+            } else if stage == TutorialStage::Complete {
+                should_exit_to_world = true;
+            }
+        }
+
+        if should_exit_to_world {
+            self.enter_world_exploration()?;
+        } else {
+            self.state = UIState::Tutorial(tutorial_ui_state);
+        }
+        Ok(())
+    }
+
+    fn handle_warlord_menu_input(&mut self, key: KeyEvent, mut warlord_state: crate::ui::WarlordMenuState) -> anyhow::Result<()> {
+        use crate::ui::WarlordTab;
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') => {
+                warlord_state.selected_tab = match warlord_state.selected_tab {
+                    WarlordTab::Overview => WarlordTab::Advancement,
+                    WarlordTab::Followers => WarlordTab::Overview,
+                    WarlordTab::Territories => WarlordTab::Followers,
+                    WarlordTab::SpyNetwork => WarlordTab::Territories,
+                    WarlordTab::Wars => WarlordTab::SpyNetwork,
+                    WarlordTab::Advancement => WarlordTab::Wars,
+                };
+                self.state = UIState::WarlordMenu(warlord_state);
+            }
+            KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') => {
+                warlord_state.selected_tab = match warlord_state.selected_tab {
+                    WarlordTab::Overview => WarlordTab::Followers,
+                    WarlordTab::Followers => WarlordTab::Territories,
+                    WarlordTab::Territories => WarlordTab::SpyNetwork,
+                    WarlordTab::SpyNetwork => WarlordTab::Wars,
+                    WarlordTab::Wars => WarlordTab::Advancement,
+                    WarlordTab::Advancement => WarlordTab::Overview,
+                };
+                self.state = UIState::WarlordMenu(warlord_state);
+            }
+            KeyCode::Esc => {
+                // Return to character menu or playing state
+                if self.current_character.is_some() {
+                    self.state = UIState::CharacterMenu;
+                } else {
+                    self.state = UIState::MainMenu;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
 }
